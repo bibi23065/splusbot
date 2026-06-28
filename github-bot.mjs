@@ -69,44 +69,41 @@ async function getUnreadChats(page) {
 }
 
 async function getMessagesFromChat(page) {
-  // Wait for chat to load
-  await new Promise(r => setTimeout(r, 4000));
-
-  // Extract messages using innerText of the entire page after chat opens
-  // This catches text rendered in any way (canvas, virtual DOM, etc.)
+  await new Promise(r => setTimeout(r, 5000));
   return await page.evaluate(() => {
     const msgs = [];
-    // Get all text from the right side of the screen (chat area)
-    const allElements = document.querySelectorAll('*');
-    const seenTexts = new Set();
+    // Get ALL innerText from the page
+    const bodyText = document.body.innerText;
+    const lines = bodyText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-    for (const el of allElements) {
-      // Only consider elements in the right portion of the screen
-      const rect = el.getBoundingClientRect();
-      if (rect.left < 350) continue; // Skip left panel (chat list)
+    // Find lines that look like messages (not UI elements)
+    const uiPatterns = /^(همه|شخصی|گروه|کانال|جستجو|تنظیمات|حساب|تماس|ویترین|هوش|چت|پیام|گفتگو|بازگشت|ارسال|جست|منو|بستن|خانه|بیشتر|فیلتر|آرشیو|پین|سنجاق|حذف|بیصدا|گزارش|تغییر|مدیریت|ذخیره|forward|reply|copy|delete|pin|mute|report|archive)$/i;
+    const numPattern = /^\d+$/;
+    const datePattern = /^\d{1,2}:\d{2}$/;
+    const dateFormat = /^\d{1,2}\/\d{1,2}$/;
+    const persianDate = /^(دیروز|امروز|۱|۲|۳|۴|۵|۶|۷|۸|۹|۱۰|۱۱|۱۲|۱۳|۱۴|۱۵|۱۶|۱۷|۱۸|۱۹|۲۰|۲۱|۲۲|۲۳|۲۴|۲۵|۲۶|۲۷|۲۸|۲۹|۳۰|۳[۱۲])\s*(فروردین|اردیبهشت|خرداد|تیر|مرداد|شهریور|مهر|آبان|آذر|دی|بهمن|اسفند)/;
 
-      const text = el.textContent?.trim();
-      if (!text || text.length < 2 || text.length > 500) continue;
-      if (seenTexts.has(text)) continue;
+    for (const line of lines) {
+      if (line.length < 3 || line.length > 400) continue;
+      if (numPattern.test(line)) continue;
+      if (datePattern.test(line)) continue;
+      if (dateFormat.test(line)) continue;
+      if (persianDate.test(line)) continue;
+      if (uiPatterns.test(line)) continue;
+      if (line.match(/^(من|تو|و|این|آن|که|را|از|با|بر|در|به|تا|و)\s*$/)) continue;
 
-      const cls = el.className?.toString?.() || '';
-      // Skip UI chrome
-      if (cls.match(/header|input|button|icon|avatar|tab|menu|search|status|spinner|loading/i)) continue;
-      // Only leaf nodes or nodes with minimal children
-      if (el.children.length > 3) continue;
-
-      seenTexts.add(text);
-      msgs.push(text.slice(0, 300));
+      msgs.push(line);
     }
 
-    return msgs.slice(-15);
+    // Return unique lines, last 15
+    return [...new Set(msgs)].slice(-15);
   });
 }
 
 async function main() {
-  console.log('Soroush+ GitHub Actions Bot');
+  console.log('Soroush+ Bot');
 
-  if (!SESSION_JSON) { console.log('No SPLUS_SESSION.'); return; }
+  if (!SESSION_JSON) { console.log('No session.'); return; }
 
   let sessionData;
   try { sessionData = JSON.parse(SESSION_JSON); } catch { sessionData = {}; }
@@ -119,22 +116,17 @@ async function main() {
 
   const page = await browser.newPage();
 
-  console.log('Restoring session...');
   await page.goto('https://web.splus.ir/', { waitUntil: 'networkidle2', timeout: 60000 });
-
   await page.evaluate((data) => {
     for (const [key, val] of Object.entries(data)) {
-      if (val === null || val === undefined) continue;
-      localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
+      if (val != null) localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
     }
   }, sessionData);
-
   await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
-  console.log('Waiting for chat list...');
   await waitForChatList(page);
 
   if (page.url().includes('auth') || page.url().includes('login')) {
-    await sendTg('Session expired. Re-login needed.');
+    await sendTg('Session expired.');
     await browser.close();
     return;
   }
@@ -146,46 +138,35 @@ async function main() {
     return;
   }
 
-  console.log(`Found ${unreadChats.length} unread chats.`);
+  console.log(`${unreadChats.length} unread chats.`);
 
-  const allResults = [];
+  let msg = `Soroush+ Unread (${unreadChats.length} chats):\n\n`;
 
   for (const chat of unreadChats) {
     console.log(`Opening: ${chat.title}`);
     try {
-      const clicked = await page.evaluate((idx) => {
-        const items = document.querySelectorAll('.chat-list .ListItem');
-        if (items[idx]) { items[idx].click(); return true; }
-        return false;
+      await page.evaluate((idx) => {
+        document.querySelectorAll('.chat-list .ListItem')[idx]?.click();
       }, chat.index);
 
-      if (!clicked) continue;
-
       const messages = await getMessagesFromChat(page);
-      allResults.push({ ...chat, messages });
+
+      msg += `**${chat.title}** (${chat.unreadCount})\n`;
+      if (messages.length > 0) {
+        messages.forEach(m => { msg += `  ${m}\n`; });
+      } else {
+        msg += `  ${chat.preview}\n`;
+      }
+      msg += '\n';
 
       // Return to chat list
       await page.evaluate(() => {
-        const tab = document.querySelector('.Tab--active');
-        if (tab) tab.click();
+        document.querySelector('.Tab--active')?.click();
       });
       await waitForChatList(page);
     } catch (e) {
-      console.log(`Error: ${e.message}`);
-      allResults.push({ ...chat, messages: [] });
+      msg += `**${chat.title}** (${chat.unreadCount})\n  ${chat.preview}\n\n`;
     }
-  }
-
-  // Send results
-  let msg = `Soroush+ Unread (${allResults.length} chats):\n\n`;
-  for (const r of allResults) {
-    msg += `**${r.title}** (${r.unreadCount})\n`;
-    if (r.messages.length > 0) {
-      r.messages.forEach(m => { msg += `  ${m}\n`; });
-    } else {
-      msg += `  ${r.preview}\n`;
-    }
-    msg += '\n';
   }
 
   console.log(msg);
