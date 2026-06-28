@@ -55,24 +55,18 @@ async function waitForChatList(page) {
 async function getUnreadChats(page) {
   return await page.evaluate(() => {
     const results = [];
-    const selectors = ['.chat-list .ListItem', '.chat-list li', '.ListItem.Chat'];
-    for (const sel of selectors) {
-      const items = document.querySelectorAll(sel);
-      if (items.length > 0) {
-        items.forEach((item, index) => {
-          const badge = item.querySelector('.badge, [class*="badge"], [class*="Badge"]');
-          if (badge) {
-            const count = parseInt(badge.textContent?.trim() || '0', 10);
-            if (count > 0) {
-              const titleEl = item.querySelector('.title, .info .title');
-              const title = titleEl?.textContent?.trim() || 'Unknown';
-              results.push({ index, title, unreadCount: count });
-            }
-          }
-        });
-        break;
-      }
-    }
+    const items = document.querySelectorAll('.chat-list .ListItem');
+    items.forEach((item, index) => {
+      // Check for unread indicators: badge, counter, unread class, or bold text
+      const badge = item.querySelector('.badge, [class*="unread"], [class*="counter"], [class*="Badge"]');
+      if (!badge) return;
+      const count = parseInt(badge.textContent?.trim() || '0', 10);
+      if (count <= 0) return;
+
+      const titleEl = item.querySelector('.title');
+      const title = titleEl?.textContent?.trim() || 'Unknown';
+      results.push({ index, title, unreadCount: count });
+    });
     return results;
   });
 }
@@ -81,32 +75,25 @@ async function getMessagesFromChat(page) {
   await new Promise(r => setTimeout(r, 3000));
   return await page.evaluate(() => {
     const messages = [];
-    // Look for message bubbles/text content in the right panel
-    const selectors = [
-      '.Message .text',
-      '.bubble .text',
-      '[class*="message"] [class*="text"]',
-      '.message-text',
-      '.bubble .content',
-    ];
-    for (const sel of selectors) {
-      const items = document.querySelectorAll(sel);
-      if (items.length > 0) {
-        items.forEach(item => {
-          const text = item.textContent?.trim();
-          if (text && text.length > 0 && text.length < 2000) {
-            messages.push(text);
-          }
-        });
-        break;
-      }
+    // Soroush uses .bubble for message containers
+    const bubbles = document.querySelectorAll('.bubble, [class*="Bubble"], [class*="message"]');
+    if (bubbles.length > 0) {
+      // Get last 5 messages (most recent)
+      const recent = Array.from(bubbles).slice(-5);
+      recent.forEach(bubble => {
+        const textEl = bubble.querySelector('.text, .content, [class*="text"], [class*="content"]');
+        const text = textEl?.textContent?.trim() || bubble.textContent?.trim();
+        if (text && text.length > 0 && text.length < 2000) {
+          messages.push(text.slice(0, 300));
+        }
+      });
     }
-    // Fallback: get all visible text from right panel
+    // Fallback: grab text from right panel
     if (messages.length === 0) {
-      const rightPanel = document.querySelector('.right-column, .middle-column, [class*="MiddleColumn"], [class*="chat-content"]');
-      if (rightPanel) {
-        const text = rightPanel.innerText?.trim();
-        if (text) messages.push(text.slice(0, 2000));
+      const right = document.querySelector('.middle-column, [class*="MiddleColumn"], .chat-content');
+      if (right) {
+        const text = right.innerText?.trim();
+        if (text) messages.push(text.slice(0, 500));
       }
     }
     return messages;
@@ -174,21 +161,15 @@ async function main() {
     console.log(`Opening chat: ${chat.title} (${chat.unreadCount} unread)`);
 
     try {
-      // Click on the chat item
-      const chatItem = await page.evaluate((chatTitle) => {
-        const selectors = ['.chat-list .ListItem', '.chat-list li', '.ListItem.Chat'];
-        for (const sel of selectors) {
-          const items = document.querySelectorAll(sel);
-          for (const item of items) {
-            const titleEl = item.querySelector('.title, .info .title');
-            if (titleEl?.textContent?.trim() === chatTitle) {
-              item.click();
-              return true;
-            }
-          }
+      // Click on the chat item by index
+      const clicked = await page.evaluate((chatIndex) => {
+        const items = document.querySelectorAll('.chat-list .ListItem');
+        if (items[chatIndex]) {
+          items[chatIndex].click();
+          return true;
         }
         return false;
-      }, chat.title);
+      }, chat.index);
 
       if (!chatItem) {
         console.log(`Could not find chat: ${chat.title}`);
@@ -198,8 +179,11 @@ async function main() {
       const messages = await getMessagesFromChat(page);
       allResults.push({ title: chat.title, unreadCount: chat.unreadCount, messages });
 
-      // Go back to chat list
-      await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
+      // Go back to chat list by clicking the back button or first tab
+      await page.evaluate(() => {
+        const backBtn = document.querySelector('[class*="back"], [class*="Back"]');
+        if (backBtn) backBtn.click();
+      });
       await waitForChatList(page);
 
     } catch (e) {
