@@ -76,7 +76,17 @@ async function main() {
   }, sessionData);
 
   await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
-  await new Promise(r => setTimeout(r, 5000));
+
+  // Wait for chat list to fully load (no more spinners, items present)
+  console.log('Waiting for chat list to load...');
+  await page.waitForFunction(() => {
+    const spinner = document.querySelector('.Loading, .Spinner, [class*="Spinner"]');
+    if (spinner && spinner.offsetParent !== null) return false;
+    const items = document.querySelectorAll('.chat-list .ListItem, .chat-list li');
+    return items.length > 0;
+  }, { timeout: 30000 }).catch(() => console.log('Timeout waiting for chats, proceeding anyway'));
+
+  await new Promise(r => setTimeout(r, 2000));
 
   const url = page.url();
   console.log(`Current URL: ${url}`);
@@ -108,21 +118,43 @@ async function main() {
 
   const chatList = await page.evaluate(() => {
     const results = [];
-    // Target .ListItem elements inside .chat-list (Soroush DOM)
-    const items = document.querySelectorAll('.chat-list .ListItem');
-    for (const item of items) {
-      const badge = item.querySelector('.badge');
-      if (badge) {
-        const count = parseInt(badge.textContent?.trim() || '0', 10);
-        if (count > 0) {
-          // Get chat title from the ListItem's text content
-          const fullText = item.textContent?.trim() || '';
-          // Extract title: everything before the timestamp pattern
-          const titleMatch = fullText.match(/^(.+?)(?:\d{1,2}:\d{2}|\d{1,2}\/\d{1,2})/);
-          const title = titleMatch ? titleMatch[1].trim() : fullText.slice(0, 50);
-          results.push({ chat: title, unread: count });
+    // Try specific selectors first
+    const selectors = [
+      '.chat-list .ListItem',
+      '.chat-list li',
+      '.ListItem.Chat',
+      '[class*="Chat"][class*="item"]',
+    ];
+    for (const sel of selectors) {
+      const items = document.querySelectorAll(sel);
+      if (items.length > 0) {
+        for (const item of items) {
+          const badge = item.querySelector('.badge, [class*="badge"], [class*="Badge"]');
+          if (badge) {
+            const count = parseInt(badge.textContent?.trim() || '0', 10);
+            if (count > 0) {
+              const fullText = item.textContent?.trim() || '';
+              const titleMatch = fullText.match(/^(.+?)(?:\d{1,2}:\d{2})/);
+              const title = titleMatch ? titleMatch[1].trim() : fullText.slice(0, 50);
+              results.push({ chat: title, unread: count });
+            }
+          }
         }
+        break;
       }
+    }
+    // Fallback: scan all elements for badge-like numbers near chat-like containers
+    if (results.length === 0) {
+      document.querySelectorAll('[class*="badge"]').forEach(badge => {
+        const count = parseInt(badge.textContent?.trim() || '0', 10);
+        if (count > 0 && count < 10000) {
+          const parent = badge.closest('[class*="Chat"], [class*="chat"], [class*="item"], [class*="Item"]');
+          if (parent && parent.textContent.length > 5) {
+            const text = parent.textContent.trim().slice(0, 60);
+            results.push({ chat: text, unread: count });
+          }
+        }
+      });
     }
     return results;
   });
