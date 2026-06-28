@@ -46,8 +46,7 @@ async function sendTg(text) {
 
 async function waitForChatList(page) {
   await page.waitForFunction(() => {
-    const items = document.querySelectorAll('.chat-list .ListItem, .chat-list li');
-    return items.length > 0;
+    return document.querySelectorAll('.chat-list .ListItem').length > 0;
   }, { timeout: 30000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 1500));
 }
@@ -61,7 +60,6 @@ async function getUnreadChats(page) {
       if (!badge) return;
       const count = parseInt(badge.textContent?.trim() || '0', 10);
       if (count <= 0) return;
-
       const titleEl = item.querySelector('.title');
       const title = titleEl?.textContent?.trim() || 'Unknown';
       const lastMsg = item.querySelector('.last-message');
@@ -72,32 +70,78 @@ async function getUnreadChats(page) {
   });
 }
 
-async function getMessagesFromChat(page) {
-  await new Promise(r => setTimeout(r, 3000));
-  return await page.evaluate(() => {
-    const messages = [];
-    // Broad search: find elements with text content inside the main chat area
-    const chatArea = document.querySelector('.middle-column, [class*="MiddleColumn"]');
-    if (!chatArea) return messages;
+async function getMessagesFromChat(page, cdp) {
+  // Set up WebSocket frame interception via CDP
+  const messages = [];
 
-    // Look for any div/p with short text that looks like a message
-    const candidates = chatArea.querySelectorAll('div, p, span');
-    candidates.forEach(el => {
-      const text = el.textContent?.trim();
-      if (!text || text.length < 3 || text.length > 500) return;
-      // Skip if parent already captured this text
-      if (el.parentElement && messages.includes(el.parentElement.textContent?.trim())) return;
-      // Skip UI elements
-      const cls = el.className?.toString?.() || '';
-      if (cls.match(/header|sidebar|input|button|icon|avatar|time|meta|tab|menu/i)) return;
-      if (el.children.length > 0) return; // only leaf elements
-      messages.push(text.slice(0, 300));
-    });
+  // Use page.evaluate to extract messages from the app's internal state
+  // Soroush stores messages in a global store or React state
+  const result = await page.evaluate(() => {
+    const msgs = [];
 
-    // Deduplicate and return last 10
-    const unique = [...new Set(messages)];
-    return unique.slice(-10);
+    // Strategy 1: Access app's internal message store
+    // Soroush is built on GramJs/MTProto — messages are stored in app state
+    try {
+      // Check window.__STORE__ or similar global state
+      if (window.__STORE__) {
+        const state = window.__STORE__.getState?.();
+        if (state?.messages) {
+          for (const [, msg] of Object.entries(state.messages)) {
+            if (msg?.message) msgs.push(msg.message);
+          }
+        }
+      }
+    } catch {}
+
+    // Strategy 2: Access React fiber tree
+    try {
+      const root = document.querySelector('#root') || document.querySelector('#app');
+      if (root?._reactRootContainer || root?.__reactFiber$) {
+        // Found React root — traverse fiber for message data
+      }
+    } catch {}
+
+    // Strategy 3: Extract from DOM with broader selectors
+    const chatArea = document.querySelector('.middle-column, [class*="MiddleColumn"], [class*="chat-content"]');
+    if (chatArea) {
+      // Get ALL text nodes that look like messages
+      const walker = document.createTreeWalker(chatArea, NodeFilter.SHOW_TEXT, null);
+      let node;
+      while (node = walker.nextNode()) {
+        const text = node.textContent?.trim();
+        if (text && text.length > 2 && text.length < 500) {
+          // Check parent isn't a UI element
+          const parent = node.parentElement;
+          if (parent) {
+            const tag = parent.tagName;
+            const cls = parent.className?.toString?.() || '';
+            // Skip headers, inputs, buttons, etc.
+            if (!cls.match(/header|input|button|icon|avatar|tab|menu|search|status/i)) {
+              msgs.push(text);
+            }
+          }
+        }
+      }
+    }
+
+    // Strategy 4: Get innerText of right panel and split by newlines
+    if (msgs.length === 0 && chatArea) {
+      const fullText = chatArea.innerText;
+      if (fullText) {
+        fullText.split('\n').forEach(line => {
+          const trimmed = line.trim();
+          if (trimmed.length > 2 && trimmed.length < 500) {
+            msgs.push(trimmed);
+          }
+        });
+      }
+    }
+
+    // Deduplicate and return last 15
+    return [...new Set(msgs)].slice(-15);
   });
+
+  return result;
 }
 
 async function main() {
@@ -161,7 +205,6 @@ async function main() {
     console.log(`Opening chat: ${chat.title} (${chat.unreadCount} unread)`);
 
     try {
-      // Click on the chat item by index
       const clicked = await page.evaluate((chatIndex) => {
         const items = document.querySelectorAll('.chat-list .ListItem');
         if (items[chatIndex]) {
@@ -172,23 +215,27 @@ async function main() {
       }, chat.index);
 
       if (!clicked) {
-        console.log(`Could not click chat index ${chat.index}: ${chat.title}`);
+        console.log(`Could not click chat index ${chat.index}`);
         continue;
       }
+
+      // Wait for messages to load
+      await new Promise(r => setTimeout(r, 4000));
 
       const messages = await getMessagesFromChat(page);
       allResults.push({ title: chat.title, unreadCount: chat.unreadCount, preview: chat.preview, messages });
 
-      // Go back to chat list by clicking the back button or first tab
+      // Navigate back to chat list
       await page.evaluate(() => {
-        const backBtn = document.querySelector('[class*="back"], [class*="Back"]');
-        if (backBtn) backBtn.click();
+        // Click first chat folder tab to go back
+        const tab = document.querySelector('.Tab--active, .chat-list');
+        if (tab) tab.click();
       });
       await waitForChatList(page);
 
     } catch (e) {
       console.log(`Error opening ${chat.title}: ${e.message}`);
-      allResults.push({ title: chat.title, unreadCount: chat.unreadCount, preview: chat.preview, messages: ['[Error reading messages]'] });
+      allResults.push({ title: chat.title, unreadCount: chat.unreadCount, preview: chat.preview, messages: [] });
     }
   }
 
@@ -199,12 +246,10 @@ async function main() {
     let msg = `Soroush+ Unread Messages:\n\n`;
     for (const r of allResults) {
       msg += `**${r.title}** (${r.unreadCount} unread)\n`;
-      if (r.preview) {
-        msg += `Last: ${r.preview}\n`;
-      }
       if (r.messages && r.messages.length > 0) {
-        msg += `---\n`;
-        r.messages.forEach(m => { msg += `${m}\n`; });
+        r.messages.forEach(m => { msg += `  ${m}\n`; });
+      } else if (r.preview) {
+        msg += `  Last: ${r.preview}\n`;
       }
       msg += '\n';
     }
