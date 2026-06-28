@@ -8,6 +8,7 @@
     "check": "node github-bot.mjs"
   },
   "dependencies": {
-    "puppeteer": "^23.0.0"
+    "puppeteer": "^23.0.0",
+    "tweetnacl": "^1.0.3"
   }
 }

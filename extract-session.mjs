@@ -22,22 +22,30 @@ async function main() {
 
   const storage = await page.evaluate(() => {
     const data = {};
+    const essentialKeys = [
+      'GramJs:sessionId',
+      'user_auth',
+      'sp-global-state',
+      'sp-passcode',
+      'sp-dhash',
+      'sp-multitab',
+    ];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      data[key] = localStorage.getItem(key);
+      if (essentialKeys.some(k => key.startsWith(k)) || key.startsWith('GramJs')) {
+        const val = localStorage.getItem(key);
+        if (val && val.length < 50000) data[key] = val;
+      }
     }
     return data;
   });
 
+  const size = JSON.stringify(storage).length;
   writeFileSync('session.json', JSON.stringify(storage));
-  console.log('\nsession.json saved!');
-  console.log('Upload this file as a GitHub secret called SPLUS_SESSION');
-  console.log('\nSteps:');
-  console.log('1. Go to your GitHub repo -> Settings -> Secrets -> Actions');
-  console.log('2. Click "New repository secret"');
-  console.log('3. Name: SPLUS_SESSION');
-  console.log('4. Value: paste the contents of session.json');
-  console.log('5. Done! The workflow will run automatically every 5 minutes.');
+  console.log(`\nsession.json saved! (${size} bytes, ${Object.keys(storage).length} keys)`);
+  if (size > 60000) console.log('WARNING: File may be too large for GitHub (64KB limit).');
+  console.log('\nPaste the contents of session.json as the SPLUS_SESSION secret:');
+  console.log('https://github.com/bibi23065/splusbot/settings/secrets/actions');
 
   await browser.close();
   rl.close();
