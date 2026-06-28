@@ -44,6 +44,75 @@ async function sendTg(text) {
   }
 }
 
+async function waitForChatList(page) {
+  await page.waitForFunction(() => {
+    const items = document.querySelectorAll('.chat-list .ListItem, .chat-list li');
+    return items.length > 0;
+  }, { timeout: 30000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 1500));
+}
+
+async function getUnreadChats(page) {
+  return await page.evaluate(() => {
+    const results = [];
+    const selectors = ['.chat-list .ListItem', '.chat-list li', '.ListItem.Chat'];
+    for (const sel of selectors) {
+      const items = document.querySelectorAll(sel);
+      if (items.length > 0) {
+        items.forEach((item, index) => {
+          const badge = item.querySelector('.badge, [class*="badge"], [class*="Badge"]');
+          if (badge) {
+            const count = parseInt(badge.textContent?.trim() || '0', 10);
+            if (count > 0) {
+              const titleEl = item.querySelector('.title, .info .title');
+              const title = titleEl?.textContent?.trim() || 'Unknown';
+              results.push({ index, title, unreadCount: count });
+            }
+          }
+        });
+        break;
+      }
+    }
+    return results;
+  });
+}
+
+async function getMessagesFromChat(page) {
+  await new Promise(r => setTimeout(r, 3000));
+  return await page.evaluate(() => {
+    const messages = [];
+    // Look for message bubbles/text content in the right panel
+    const selectors = [
+      '.Message .text',
+      '.bubble .text',
+      '[class*="message"] [class*="text"]',
+      '.message-text',
+      '.bubble .content',
+    ];
+    for (const sel of selectors) {
+      const items = document.querySelectorAll(sel);
+      if (items.length > 0) {
+        items.forEach(item => {
+          const text = item.textContent?.trim();
+          if (text && text.length > 0 && text.length < 2000) {
+            messages.push(text);
+          }
+        });
+        break;
+      }
+    }
+    // Fallback: get all visible text from right panel
+    if (messages.length === 0) {
+      const rightPanel = document.querySelector('.right-column, .middle-column, [class*="MiddleColumn"], [class*="chat-content"]');
+      if (rightPanel) {
+        const text = rightPanel.innerText?.trim();
+        if (text) messages.push(text.slice(0, 2000));
+      }
+    }
+    return messages;
+  });
+}
+
 async function main() {
   console.log('Soroush+ GitHub Actions Bot');
 
@@ -66,7 +135,6 @@ async function main() {
   console.log('Restoring session...');
   await page.goto('https://web.splus.ir/', { waitUntil: 'networkidle2', timeout: 60000 });
 
-  // Restore ALL localStorage values — stringify objects
   await page.evaluate((data) => {
     for (const [key, val] of Object.entries(data)) {
       if (val === null || val === undefined) continue;
@@ -77,93 +145,83 @@ async function main() {
 
   await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
 
-  // Wait for chat list to fully load (no more spinners, items present)
   console.log('Waiting for chat list to load...');
-  await page.waitForFunction(() => {
-    const spinner = document.querySelector('.Loading, .Spinner, [class*="Spinner"]');
-    if (spinner && spinner.offsetParent !== null) return false;
-    const items = document.querySelectorAll('.chat-list .ListItem, .chat-list li');
-    return items.length > 0;
-  }, { timeout: 30000 }).catch(() => console.log('Timeout waiting for chats, proceeding anyway'));
-
-  await new Promise(r => setTimeout(r, 2000));
+  await waitForChatList(page);
 
   const url = page.url();
-  console.log(`Current URL: ${url}`);
-
   if (url.includes('auth') || url.includes('login')) {
     console.log('Session expired.');
-    await sendTg('Soroush+ session expired. Send your session JSON to the bot again to re-login.');
+    await sendTg('Soroush+ session expired. Send your session JSON to the bot again.');
     await browser.close();
     return;
   }
 
-  // Take screenshot for debugging
-  await page.screenshot({ path: '/tmp/splus-debug.png', fullPage: false });
-  console.log('Screenshot saved to /tmp/splus-debug.png');
+  console.log('Finding unread chats...');
+  const unreadChats = await getUnreadChats(page);
 
-  // Dump page title and visible text for analysis
-  const pageInfo = await page.evaluate(() => {
-    return {
-      title: document.title,
-      bodyText: document.body?.innerText?.slice(0, 3000) || '',
-      allClassNames: [...new Set([...document.querySelectorAll('*')].slice(0, 500).flatMap(el => [...el.classList]))].join(', '),
-    };
-  });
-  console.log('Page title:', pageInfo.title);
-  console.log('Body text preview:', pageInfo.bodyText.slice(0, 500));
-  console.log('Class names:', pageInfo.allClassNames.slice(0, 1000));
+  if (unreadChats.length === 0) {
+    console.log('No unread messages.');
+    await sendTg('No unread messages.');
+    await browser.close();
+    return;
+  }
 
-  console.log('Checking for unread messages...');
+  console.log(`Found ${unreadChats.length} chats with unread messages.`);
 
-  const chatList = await page.evaluate(() => {
-    const results = [];
-    // Try specific selectors first
-    const selectors = [
-      '.chat-list .ListItem',
-      '.chat-list li',
-      '.ListItem.Chat',
-      '[class*="Chat"][class*="item"]',
-    ];
-    for (const sel of selectors) {
-      const items = document.querySelectorAll(sel);
-      if (items.length > 0) {
-        for (const item of items) {
-          const badge = item.querySelector('.badge, [class*="badge"], [class*="Badge"]');
-          if (badge) {
-            const count = parseInt(badge.textContent?.trim() || '0', 10);
-            if (count > 0) {
-              const fullText = item.textContent?.trim() || '';
-              const titleMatch = fullText.match(/^(.+?)(?:\d{1,2}:\d{2})/);
-              const title = titleMatch ? titleMatch[1].trim() : fullText.slice(0, 50);
-              results.push({ chat: title, unread: count });
+  const allResults = [];
+
+  for (const chat of unreadChats) {
+    console.log(`Opening chat: ${chat.title} (${chat.unreadCount} unread)`);
+
+    try {
+      // Click on the chat item
+      const chatItem = await page.evaluate((chatTitle) => {
+        const selectors = ['.chat-list .ListItem', '.chat-list li', '.ListItem.Chat'];
+        for (const sel of selectors) {
+          const items = document.querySelectorAll(sel);
+          for (const item of items) {
+            const titleEl = item.querySelector('.title, .info .title');
+            if (titleEl?.textContent?.trim() === chatTitle) {
+              item.click();
+              return true;
             }
           }
         }
-        break;
-      }
-    }
-    // Fallback: scan all elements for badge-like numbers near chat-like containers
-    if (results.length === 0) {
-      document.querySelectorAll('[class*="badge"]').forEach(badge => {
-        const count = parseInt(badge.textContent?.trim() || '0', 10);
-        if (count > 0 && count < 10000) {
-          const parent = badge.closest('[class*="Chat"], [class*="chat"], [class*="item"], [class*="Item"]');
-          if (parent && parent.textContent.length > 5) {
-            const text = parent.textContent.trim().slice(0, 60);
-            results.push({ chat: text, unread: count });
-          }
-        }
-      });
-    }
-    return results;
-  });
+        return false;
+      }, chat.title);
 
-  if (chatList.length === 0) {
+      if (!chatItem) {
+        console.log(`Could not find chat: ${chat.title}`);
+        continue;
+      }
+
+      const messages = await getMessagesFromChat(page);
+      allResults.push({ title: chat.title, unreadCount: chat.unreadCount, messages });
+
+      // Go back to chat list
+      await page.goBack({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
+      await waitForChatList(page);
+
+    } catch (e) {
+      console.log(`Error opening ${chat.title}: ${e.message}`);
+      allResults.push({ title: chat.title, unreadCount: chat.unreadCount, messages: ['[Error reading messages]'] });
+    }
+  }
+
+  // Format and send
+  if (allResults.length === 0) {
     await sendTg('No unread messages found.');
   } else {
-    let msg = `Soroush+ Unread (${chatList.length} chats):\n\n`;
-    chatList.forEach(c => { msg += `${c.chat} (${c.unread} unread)\n`; });
+    let msg = `Soroush+ Unread Messages:\n\n`;
+    for (const r of allResults) {
+      msg += `--- ${r.title} (${r.unreadCount} unread) ---\n`;
+      if (r.messages.length > 0) {
+        r.messages.slice(-5).forEach(m => { msg += `${m}\n`; });
+      } else {
+        msg += '[No message content extracted]\n';
+      }
+      msg += '\n';
+    }
     console.log(msg);
     await sendTg(msg);
   }
