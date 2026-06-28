@@ -75,25 +75,34 @@ async function getMessagesFromChat(page) {
   await new Promise(r => setTimeout(r, 3000));
   return await page.evaluate(() => {
     const messages = [];
-    // Soroush uses .bubble for message containers
-    const bubbles = document.querySelectorAll('.bubble, [class*="Bubble"], [class*="message"]');
-    if (bubbles.length > 0) {
-      // Get last 5 messages (most recent)
-      const recent = Array.from(bubbles).slice(-5);
-      recent.forEach(bubble => {
-        const textEl = bubble.querySelector('.text, .content, [class*="text"], [class*="content"]');
-        const text = textEl?.textContent?.trim() || bubble.textContent?.trim();
-        if (text && text.length > 0 && text.length < 2000) {
-          messages.push(text.slice(0, 300));
-        }
-      });
+    // Soroush uses various bubble selectors
+    const selectors = [
+      '.bubble .text',
+      '.bubble .content',
+      '.Message .text',
+      '.bubble-text',
+      '[class*="Bubble"] .text',
+      '[class*="bubble"] [class*="text"]',
+    ];
+    for (const sel of selectors) {
+      const items = document.querySelectorAll(sel);
+      if (items.length > 0) {
+        const recent = Array.from(items).slice(-5);
+        recent.forEach(el => {
+          const text = el.textContent?.trim();
+          if (text && text.length > 0 && text.length < 2000) {
+            messages.push(text.slice(0, 300));
+          }
+        });
+        if (messages.length > 0) break;
+      }
     }
-    // Fallback: grab text from right panel
+    // Fallback: grab text content from the chat area
     if (messages.length === 0) {
-      const right = document.querySelector('.middle-column, [class*="MiddleColumn"], .chat-content');
-      if (right) {
-        const text = right.innerText?.trim();
-        if (text) messages.push(text.slice(0, 500));
+      const chatArea = document.querySelector('.middle-column, [class*="MiddleColumn"], [class*="chat-body"]');
+      if (chatArea) {
+        const text = chatArea.innerText?.trim();
+        if (text && text.length > 10) messages.push(text.slice(0, 500));
       }
     }
     return messages;
@@ -171,8 +180,8 @@ async function main() {
         return false;
       }, chat.index);
 
-      if (!chatItem) {
-        console.log(`Could not find chat: ${chat.title}`);
+      if (!clicked) {
+        console.log(`Could not click chat index ${chat.index}: ${chat.title}`);
         continue;
       }
 
