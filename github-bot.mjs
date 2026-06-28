@@ -45,9 +45,7 @@ async function sendTg(text) {
 }
 
 async function waitForChatList(page) {
-  await page.waitForFunction(() => {
-    return document.querySelectorAll('.chat-list .ListItem').length > 0;
-  }, { timeout: 30000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelectorAll('.chat-list .ListItem').length > 0, { timeout: 30000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 1500));
 }
 
@@ -70,87 +68,45 @@ async function getUnreadChats(page) {
   });
 }
 
-async function getMessagesFromChat(page, cdp) {
-  // Set up WebSocket frame interception via CDP
-  const messages = [];
+async function getMessagesFromChat(page) {
+  // Wait for chat to load
+  await new Promise(r => setTimeout(r, 4000));
 
-  // Use page.evaluate to extract messages from the app's internal state
-  // Soroush stores messages in a global store or React state
-  const result = await page.evaluate(() => {
+  // Extract messages using innerText of the entire page after chat opens
+  // This catches text rendered in any way (canvas, virtual DOM, etc.)
+  return await page.evaluate(() => {
     const msgs = [];
+    // Get all text from the right side of the screen (chat area)
+    const allElements = document.querySelectorAll('*');
+    const seenTexts = new Set();
 
-    // Strategy 1: Access app's internal message store
-    // Soroush is built on GramJs/MTProto — messages are stored in app state
-    try {
-      // Check window.__STORE__ or similar global state
-      if (window.__STORE__) {
-        const state = window.__STORE__.getState?.();
-        if (state?.messages) {
-          for (const [, msg] of Object.entries(state.messages)) {
-            if (msg?.message) msgs.push(msg.message);
-          }
-        }
-      }
-    } catch {}
+    for (const el of allElements) {
+      // Only consider elements in the right portion of the screen
+      const rect = el.getBoundingClientRect();
+      if (rect.left < 350) continue; // Skip left panel (chat list)
 
-    // Strategy 2: Access React fiber tree
-    try {
-      const root = document.querySelector('#root') || document.querySelector('#app');
-      if (root?._reactRootContainer || root?.__reactFiber$) {
-        // Found React root — traverse fiber for message data
-      }
-    } catch {}
+      const text = el.textContent?.trim();
+      if (!text || text.length < 2 || text.length > 500) continue;
+      if (seenTexts.has(text)) continue;
 
-    // Strategy 3: Extract from DOM with broader selectors
-    const chatArea = document.querySelector('.middle-column, [class*="MiddleColumn"], [class*="chat-content"]');
-    if (chatArea) {
-      // Get ALL text nodes that look like messages
-      const walker = document.createTreeWalker(chatArea, NodeFilter.SHOW_TEXT, null);
-      let node;
-      while (node = walker.nextNode()) {
-        const text = node.textContent?.trim();
-        if (text && text.length > 2 && text.length < 500) {
-          // Check parent isn't a UI element
-          const parent = node.parentElement;
-          if (parent) {
-            const tag = parent.tagName;
-            const cls = parent.className?.toString?.() || '';
-            // Skip headers, inputs, buttons, etc.
-            if (!cls.match(/header|input|button|icon|avatar|tab|menu|search|status/i)) {
-              msgs.push(text);
-            }
-          }
-        }
-      }
+      const cls = el.className?.toString?.() || '';
+      // Skip UI chrome
+      if (cls.match(/header|input|button|icon|avatar|tab|menu|search|status|spinner|loading/i)) continue;
+      // Only leaf nodes or nodes with minimal children
+      if (el.children.length > 3) continue;
+
+      seenTexts.add(text);
+      msgs.push(text.slice(0, 300));
     }
 
-    // Strategy 4: Get innerText of right panel and split by newlines
-    if (msgs.length === 0 && chatArea) {
-      const fullText = chatArea.innerText;
-      if (fullText) {
-        fullText.split('\n').forEach(line => {
-          const trimmed = line.trim();
-          if (trimmed.length > 2 && trimmed.length < 500) {
-            msgs.push(trimmed);
-          }
-        });
-      }
-    }
-
-    // Deduplicate and return last 15
-    return [...new Set(msgs)].slice(-15);
+    return msgs.slice(-15);
   });
-
-  return result;
 }
 
 async function main() {
   console.log('Soroush+ GitHub Actions Bot');
 
-  if (!SESSION_JSON) {
-    console.log('No SPLUS_SESSION secret found.');
-    return;
-  }
+  if (!SESSION_JSON) { console.log('No SPLUS_SESSION.'); return; }
 
   let sessionData;
   try { sessionData = JSON.parse(SESSION_JSON); } catch { sessionData = {}; }
@@ -169,94 +125,71 @@ async function main() {
   await page.evaluate((data) => {
     for (const [key, val] of Object.entries(data)) {
       if (val === null || val === undefined) continue;
-      const strVal = typeof val === 'string' ? val : JSON.stringify(val);
-      localStorage.setItem(key, strVal);
+      localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
     }
   }, sessionData);
 
   await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
-
-  console.log('Waiting for chat list to load...');
+  console.log('Waiting for chat list...');
   await waitForChatList(page);
 
-  const url = page.url();
-  if (url.includes('auth') || url.includes('login')) {
-    console.log('Session expired.');
-    await sendTg('Soroush+ session expired. Send your session JSON to the bot again.');
+  if (page.url().includes('auth') || page.url().includes('login')) {
+    await sendTg('Session expired. Re-login needed.');
     await browser.close();
     return;
   }
 
-  console.log('Finding unread chats...');
   const unreadChats = await getUnreadChats(page);
-
   if (unreadChats.length === 0) {
-    console.log('No unread messages.');
     await sendTg('No unread messages.');
     await browser.close();
     return;
   }
 
-  console.log(`Found ${unreadChats.length} chats with unread messages.`);
+  console.log(`Found ${unreadChats.length} unread chats.`);
 
   const allResults = [];
 
   for (const chat of unreadChats) {
-    console.log(`Opening chat: ${chat.title} (${chat.unreadCount} unread)`);
-
+    console.log(`Opening: ${chat.title}`);
     try {
-      const clicked = await page.evaluate((chatIndex) => {
+      const clicked = await page.evaluate((idx) => {
         const items = document.querySelectorAll('.chat-list .ListItem');
-        if (items[chatIndex]) {
-          items[chatIndex].click();
-          return true;
-        }
+        if (items[idx]) { items[idx].click(); return true; }
         return false;
       }, chat.index);
 
-      if (!clicked) {
-        console.log(`Could not click chat index ${chat.index}`);
-        continue;
-      }
-
-      // Wait for messages to load
-      await new Promise(r => setTimeout(r, 4000));
+      if (!clicked) continue;
 
       const messages = await getMessagesFromChat(page);
-      allResults.push({ title: chat.title, unreadCount: chat.unreadCount, preview: chat.preview, messages });
+      allResults.push({ ...chat, messages });
 
-      // Navigate back to chat list
+      // Return to chat list
       await page.evaluate(() => {
-        // Click first chat folder tab to go back
-        const tab = document.querySelector('.Tab--active, .chat-list');
+        const tab = document.querySelector('.Tab--active');
         if (tab) tab.click();
       });
       await waitForChatList(page);
-
     } catch (e) {
-      console.log(`Error opening ${chat.title}: ${e.message}`);
-      allResults.push({ title: chat.title, unreadCount: chat.unreadCount, preview: chat.preview, messages: [] });
+      console.log(`Error: ${e.message}`);
+      allResults.push({ ...chat, messages: [] });
     }
   }
 
-  // Format and send
-  if (allResults.length === 0) {
-    await sendTg('No unread messages found.');
-  } else {
-    let msg = `Soroush+ Unread Messages:\n\n`;
-    for (const r of allResults) {
-      msg += `**${r.title}** (${r.unreadCount} unread)\n`;
-      if (r.messages && r.messages.length > 0) {
-        r.messages.forEach(m => { msg += `  ${m}\n`; });
-      } else if (r.preview) {
-        msg += `  Last: ${r.preview}\n`;
-      }
-      msg += '\n';
+  // Send results
+  let msg = `Soroush+ Unread (${allResults.length} chats):\n\n`;
+  for (const r of allResults) {
+    msg += `**${r.title}** (${r.unreadCount})\n`;
+    if (r.messages.length > 0) {
+      r.messages.forEach(m => { msg += `  ${m}\n`; });
+    } else {
+      msg += `  ${r.preview}\n`;
     }
-    console.log(msg);
-    await sendTg(msg);
+    msg += '\n';
   }
 
+  console.log(msg);
+  await sendTg(msg);
   await browser.close();
 }
 
