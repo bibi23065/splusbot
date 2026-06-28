@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node puppeteer-bot.mjs"
+    "extract": "node extract-session.mjs",
+    "check": "node github-bot.mjs"
   },
   "dependencies": {
     "puppeteer": "^23.0.0"
