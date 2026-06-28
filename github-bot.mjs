@@ -62,7 +62,12 @@ async function getUnreadChats(page) {
       const title = titleEl?.textContent?.trim() || 'Unknown';
       const lastMsg = item.querySelector('.last-message');
       const preview = lastMsg?.textContent?.trim() || '';
-      results.push({ index, title, unreadCount: count, preview: preview.slice(0, 200) });
+      // Extract chat ID from the item's data attributes or onclick
+      const dataId = item.getAttribute('data-chat-id') || item.getAttribute('data-id');
+      const onclick = item.getAttribute('onclick') || '';
+      const idMatch = onclick.match(/(-?\d+)/);
+      const chatId = dataId || (idMatch ? idMatch[1] : null);
+      results.push({ index, title, unreadCount: count, preview: preview.slice(0, 200), chatId });
     });
     return results;
   });
@@ -132,8 +137,8 @@ async function main() {
     return;
   }
 
-  // Take initial screenshot
-  await page.screenshot({ path: '/tmp/splus-before.png' });
+  // Take initial screenshot for debugging
+  await page.screenshot({ path: '/tmp/splus-initial.png' });
 
   const unreadChats = await getUnreadChats(page);
   if (unreadChats.length === 0) {
@@ -149,18 +154,61 @@ async function main() {
   for (const chat of unreadChats) {
     console.log(`Opening: ${chat.title}`);
     try {
-      // Click using dispatchEvent for reliability
-      await page.evaluate((idx) => {
-        const item = document.querySelectorAll('.chat-list .ListItem')[idx];
+      // Navigate directly to chat via hash
+      await page.evaluate((chatIndex) => {
+        const item = document.querySelectorAll('.chat-list .ListItem')[chatIndex];
         if (item) {
-          item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          // Try clicking the chat item's inner link/button
+          const link = item.querySelector('a, button, [role="button"]');
+          if (link) link.click();
+          else item.click();
         }
       }, chat.index);
 
-      await new Promise(r => setTimeout(r, 3000));
-      await page.screenshot({ path: `/tmp/splus-chat-${chat.index}.png` });
+      await new Promise(r => setTimeout(r, 4000));
 
-      const messages = await extractChatMessages(page);
+      // Extract messages from the right panel (chat view)
+      const messages = await page.evaluate(() => {
+        const msgs = [];
+        const seen = new Set();
+
+        // Find elements that are in the right portion of the screen
+        // and look like message content
+        const allEls = document.querySelectorAll('.bubble, [class*="Bubble"], [class*="message"], .text, [class*="text"]');
+        for (const el of allEls) {
+          const rect = el.getBoundingClientRect();
+          if (rect.left < 350) continue;
+          const text = el.textContent?.trim();
+          if (!text || text.length < 2 || text.length > 500) continue;
+          if (seen.has(text)) continue;
+          const cls = el.className?.toString?.() || '';
+          if (cls.match(/header|input|button|icon|avatar|tab|menu|badge/i)) continue;
+          seen.add(text);
+          msgs.push(text.slice(0, 300));
+        }
+
+        // If no messages found, try innerText of right panel
+        if (msgs.length === 0) {
+          const rightPanel = document.querySelector('.middle-column, [class*="MiddleColumn"]');
+          if (rightPanel) {
+            const rect = rightPanel.getBoundingClientRect();
+            if (rect.left > 300) {
+              const text = rightPanel.innerText?.trim();
+              if (text) {
+                text.split('\n').forEach(line => {
+                  const trimmed = line.trim();
+                  if (trimmed.length > 2 && trimmed.length < 400 && !seen.has(trimmed)) {
+                    seen.add(trimmed);
+                    msgs.push(trimmed);
+                  }
+                });
+              }
+            }
+          }
+        }
+
+        return msgs.slice(-10);
+      });
 
       msg += `**${chat.title}** (${chat.unreadCount})\n`;
       if (messages.length > 0) {
@@ -170,7 +218,7 @@ async function main() {
       }
       msg += '\n';
 
-      // Navigate back
+      // Navigate back to chat list
       await page.evaluate(() => {
         document.querySelector('.Tab--active')?.click();
       });
