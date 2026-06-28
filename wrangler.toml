@@ -3,9 +3,6 @@ main = "src/index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-[vars]
-TELEGRAM_BOT_TOKEN = "8960541207:AAEyAriLq0tWOMZjFEMSL6plhoywCql5TRg"
-
 [[kv_namespaces]]
 binding = "KV"
-id = "9b8e19dbcd2c4e45aee2f762578eb8f4"
+id = "707d8b6717ac469280de04a693146084"

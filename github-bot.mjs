@@ -48,7 +48,7 @@ async function main() {
   console.log('Soroush+ GitHub Actions Bot');
 
   if (!SESSION_JSON) {
-    console.log('No SPLUS_SESSION secret found. Run extract-session.mjs first.');
+    console.log('No SPLUS_SESSION secret found. Send your session JSON to the bot first.');
     return;
   }
 
@@ -68,7 +68,9 @@ async function main() {
 
   await page.evaluate((data) => {
     for (const [key, val] of Object.entries(data)) {
-      localStorage.setItem(key, val);
+      if (typeof val === 'string') {
+        localStorage.setItem(key, val);
+      }
     }
   }, sessionData);
 
@@ -109,14 +111,14 @@ async function main() {
 
   if (chatList.length === 0) {
     console.log('No unread messages found.');
-    const pageTitle = await page.title();
-    console.log(`Page title: ${pageTitle}`);
     const url = page.url();
     console.log(`Current URL: ${url}`);
 
     if (url.includes('auth') || url.includes('login')) {
       console.log('Session expired. Need to re-extract.');
-      await sendTg('Soroush+ session expired. Run extract-session.mjs again to refresh.');
+      await sendTg('Soroush+ session expired. Send your session JSON to the bot again to re-login.');
+    } else {
+      await sendTg('No unread messages.');
     }
   } else {
     let msg = `Soroush+ Unread (${chatList.length} chats):\n\n`;

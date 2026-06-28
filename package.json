@@ -1,14 +1,20 @@
 {
   "name": "splusbot",
-  "version": "1.0.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
     "extract": "node extract-session.mjs",
     "check": "node github-bot.mjs"
   },
   "dependencies": {
-    "puppeteer": "^23.0.0",
-    "tweetnacl": "^1.0.3"
+    "puppeteer": "^23.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.22.4"
   }
 }
