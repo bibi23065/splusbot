@@ -45,6 +45,7 @@ async function triggerGitHubWorkflow(githubToken: string): Promise<{ success: bo
       'Authorization': `token ${githubToken}`,
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
+      'User-Agent': 'splusbot-worker',
     },
     body: JSON.stringify({ ref: 'main' }),
   });
@@ -60,6 +61,7 @@ async function getLatestRun(githubToken: string): Promise<any> {
     headers: {
       'Authorization': `token ${githubToken}`,
       'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'splusbot-worker',
     },
   });
   if (!resp.ok) return null;

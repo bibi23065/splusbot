@@ -10,7 +10,10 @@
     "check": "node github-bot.mjs"
   },
   "dependencies": {
-    "puppeteer": "^23.0.0"
+    "libsodium-wrappers": "^0.8.4",
+    "puppeteer": "^23.0.0",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240117.0",
