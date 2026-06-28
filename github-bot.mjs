@@ -108,45 +108,22 @@ async function main() {
 
   const chatList = await page.evaluate(() => {
     const results = [];
-    // Try many selector strategies
-    const strategies = [
-      // Strategy 1: Look for elements with badge/counter containing numbers
-      () => {
-        const allElements = document.querySelectorAll('*');
-        for (const el of allElements) {
-          const text = el.textContent?.trim() || '';
-          if (/^\d+$/.test(text) && parseInt(text) > 0 && parseInt(text) < 1000) {
-            const parent = el.closest('[class*="chat"], [class*="Chat"], [class*="item"], [class*="Item"], [class*="dialog"], [class*="Dialog"]');
-            if (parent) {
-              const titleEl = parent.querySelector('[class*="title"], [class*="name"], [class*="Title"], [class*="Name"], [class*="peer"]');
-              results.push({
-                chat: titleEl?.textContent?.trim() || parent.textContent?.trim()?.slice(0, 50) || 'Unknown',
-                unread: parseInt(text),
-              });
-            }
-          }
+    // Target .ListItem elements inside .chat-list (Soroush DOM)
+    const items = document.querySelectorAll('.chat-list .ListItem');
+    for (const item of items) {
+      const badge = item.querySelector('.badge');
+      if (badge) {
+        const count = parseInt(badge.textContent?.trim() || '0', 10);
+        if (count > 0) {
+          // Get chat title from the ListItem's text content
+          const fullText = item.textContent?.trim() || '';
+          // Extract title: everything before the timestamp pattern
+          const titleMatch = fullText.match(/^(.+?)(?:\d{1,2}:\d{2}|\d{1,2}\/\d{1,2})/);
+          const title = titleMatch ? titleMatch[1].trim() : fullText.slice(0, 50);
+          results.push({ chat: title, unread: count });
         }
-      },
-      // Strategy 2: Look for specific Soroush class patterns
-      () => {
-        document.querySelectorAll('[class*="Badge"], [class*="badge"], [class*="unread"], [class*="counter"], [class*="Counter"]').forEach(badge => {
-          const count = parseInt(badge.textContent?.trim() || '0', 10);
-          if (count > 0) {
-            const parent = badge.closest('div, li, a');
-            if (parent) {
-              results.push({ chat: parent.textContent?.trim()?.slice(0, 50) || 'Unknown', unread: count });
-            }
-          }
-        });
-      },
-    ];
-
-    for (const strategy of strategies) {
-      results.length = 0;
-      strategy();
-      if (results.length > 0) break;
+      }
     }
-
     return results;
   });
 
