@@ -1,255 +1,225 @@
-import type { Env } from './env';
-import type { TelegramUpdate, SplusSession } from './types';
-import { sendMessage, answerCallbackQuery, sendInlineKeyboard } from './telegram';
-import { getUserState, setUserState, clearUserState, saveSession, getSession, deleteSession, isValidPhone, isValidCode, normalizePhone } from './state-machine';
-import { sendSMS, verifyCode, getConversationList, getNewPrivateMessages, getNewChannelMessages } from './splus-client';
+import type { Env } from './types';
+
+const BOT_TOKEN = '8960541207:AAEyAriLq0tWOMZjFEMSL6plhoywCql5TRg';
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+async function sendMsg(chatId: number, text: string, replyMarkup?: any): Promise<any> {
+  const body: any = { chat_id: chatId, text };
+  if (replyMarkup) body.reply_markup = JSON.stringify(replyMarkup);
+  const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return resp.json();
+}
+
+async function answerCallback(callbackQueryId: string): Promise<void> {
+  await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackQueryId }),
+  });
+}
+
+async function getState(kv: KVNamespace, chatId: number): Promise<any> {
+  const data = await kv.get(`splusbot:state:${chatId}`, 'json');
+  return data ?? { state: 'UNAUTHENTICATED' };
+}
+
+async function setState(kv: KVNamespace, chatId: number, state: any): Promise<void> {
+  await kv.put(`splusbot:state:${chatId}`, JSON.stringify(state));
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function formatTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleString('en-CA', { timeZone: 'Asia/Tehran' }).replace(',', '');
+}
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === '/health') {
-      return new Response('OK', { status: 200 });
-    }
-
-    if (request.method !== 'POST' || url.pathname !== '/') {
-      return new Response('Not Found', { status: 404 });
-    }
-
-    let update: TelegramUpdate;
-    try {
-      update = await request.json() as TelegramUpdate;
-    } catch {
-      return new Response('Bad Request', { status: 400 });
-    }
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    if (request.method === 'GET') return new Response('Splus Bot v2', { status: 200 });
 
     try {
-      if (update.message) {
-        await handleMessage(env, update.message);
-      } else if (update.callback_query) {
-        await handleCallbackQuery(env, update.callback_query);
+      const update = await request.json() as any;
+      const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id;
+      const text = update.message?.text || update.callback_query?.data || '';
+      const callbackQueryId = update.callback_query?.id;
+
+      if (!chatId || !env.KV) return new Response('ok', { status: 200 });
+
+      if (callbackQueryId) await answerCallback(callbackQueryId);
+
+      const state = await getState(env.KV, chatId);
+
+      switch (state.state) {
+        case 'UNAUTHENTICATED': {
+          if (text === '/start') {
+            const kb = { inline_keyboard: [[{ text: 'Login to Soroush+', callback_data: 'login_splus' }]] };
+            await sendMsg(chatId, 'Welcome! To login, run the auth script locally:\n\n<code>python auth.py</code>\n\nGet the token and paste it here.', kb);
+          } else if (text === 'login_splus') {
+            await setState(env.KV, chatId, { state: 'AWAITING_JWT' });
+            await sendMsg(chatId, 'Run <code>python auth.py</code> on your computer.\nThen paste the session token here:');
+          }
+          break;
+        }
+        case 'AWAITING_JWT': {
+          if (text && text.length > 20 && !text.startsWith('/')) {
+            try {
+              const parsed = JSON.parse(text);
+              await env.KV.put(`splusbot:token:${chatId}`, JSON.stringify(parsed));
+            } catch {
+              await env.KV.put(`splusbot:token:${chatId}`, text.trim());
+            }
+            await setState(env.KV, chatId, { state: 'AUTHENTICATED' });
+            const kb = { inline_keyboard: [[{ text: 'Fetch Unread Messages', callback_data: 'fetch_unread' }]] };
+            await sendMsg(chatId, 'Authenticated! Click below to fetch unread messages.', kb);
+          } else {
+            await sendMsg(chatId, 'Invalid token. Please paste the full session data from <code>auth.py</code>.');
+          }
+          break;
+        }
+        case 'AUTHENTICATED': {
+          if (text === 'fetch_unread' || text === '/fetch') {
+            const tokenData = await env.KV.get(`splusbot:token:${chatId}`);
+            if (!tokenData) {
+              await sendMsg(chatId, 'Session expired. Send /start to login again.');
+              await setState(env.KV, chatId, { state: 'UNAUTHENTICATED' });
+              return new Response('ok', { status: 200 });
+            }
+            try {
+              await sendMsg(chatId, 'Fetching chats...');
+              const dialogs = await loadDialogs(tokenData);
+              const unread = dialogs.filter((d: any) => d.unreadCount > 0);
+              if (unread.length === 0) {
+                const kb = { inline_keyboard: [[{ text: 'Fetch Again', callback_data: 'fetch_unread' }]] };
+                await sendMsg(chatId, 'No unread messages.', kb);
+              } else {
+                await env.KV.put(`splusbot:dialogs:${chatId}`, JSON.stringify(unread));
+                const buttons = unread.slice(0, 8).map((d: any, i: number) => [{ text: `${d.title} (${d.unreadCount})`, callback_data: `chat_${i}` }]);
+                buttons.push([{ text: 'Refresh', callback_data: 'fetch_unread' }]);
+                const kb = { inline_keyboard: buttons };
+                await sendMsg(chatId, `Found ${unread.length} chats with unread messages. Tap to view:`, kb);
+              }
+            } catch (e: any) {
+              await sendMsg(chatId, `Error: ${e.message}\n\nIf fetching fails, the Soroush+ API may need MTProto (not supported from Workers). Use the Puppeteer script locally: <code>npm start</code>`);
+            }
+          } else if (text.startsWith('chat_') && text !== 'chat_page_2') {
+            const tokenData = await env.KV.get(`splusbot:token:${chatId}`);
+            const dialogsJson = await env.KV.get(`splusbot:dialogs:${chatId}`);
+            if (!tokenData || !dialogsJson) {
+              await sendMsg(chatId, 'Session expired. Send /start to login again.');
+              return new Response('ok', { status: 200 });
+            }
+            const idx = parseInt(text.replace('chat_', ''), 10);
+            const dialogs = JSON.parse(dialogsJson);
+            const dialog = dialogs[idx];
+            if (!dialog) {
+              await sendMsg(chatId, 'Chat not found.');
+              return new Response('ok', { status: 200 });
+            }
+            try {
+              await sendMsg(chatId, `Fetching messages from <b>${escapeHtml(dialog.title || 'Chat ' + dialog.peerId)}</b>...`);
+              const messages = await loadHistory(tokenData, dialog.peerId, dialog.peerType, Math.min(dialog.unreadCount, 20));
+              if (messages.length === 0) {
+                await sendMsg(chatId, 'No messages found.');
+              } else {
+                let msg = `<b>${escapeHtml(dialog.title || 'Chat ' + dialog.peerId)}</b> (${dialog.unreadCount} unread)\n━━━━━━━━━━━━\n`;
+                for (const m of messages) {
+                  const time = formatTime(m.date);
+                  msg += `\n<b>${escapeHtml(m.senderName)}</b> ${time}\n${m.text ? escapeHtml(m.text) : '[Media]'}\n`;
+                }
+                await sendMsg(chatId, msg);
+              }
+              const kb = { inline_keyboard: [[{ text: 'Back to chats', callback_data: 'fetch_unread' }]] };
+              await sendMsg(chatId, 'Done.', kb);
+            } catch (e: any) {
+              await sendMsg(chatId, `Error: ${e.message}`);
+            }
+          } else if (text === '/logout') {
+            await env.KV.delete(`splusbot:token:${chatId}`);
+            await env.KV.delete(`splusbot:dialogs:${chatId}`);
+            await setState(env.KV, chatId, { state: 'UNAUTHENTICATED' });
+            await sendMsg(chatId, 'Logged out. Send /start to login again.');
+          }
+          break;
+        }
       }
-    } catch (e) {
-      console.error('Handler error:', e);
-    }
 
-    return new Response('OK', { status: 200 });
+      return new Response('ok', { status: 200 });
+    } catch (e: any) {
+      return new Response('ok', { status: 200 });
+    }
   },
 };
 
-async function handleMessage(env: Env, msg: NonNullable<TelegramUpdate['message']>) {
-  const chatId = msg.chat.id;
-  const text = msg.text?.trim() || '';
+async function loadDialogs(tokenData: string): Promise<any[]> {
+  let sessionData: any;
+  try { sessionData = JSON.parse(tokenData); } catch { sessionData = { token: tokenData }; }
 
-  if (text === '/start') {
-    await clearUserState(env.BOT_KV, chatId);
-    await setUserState(env.BOT_KV, chatId, { state: 'AWAITING_PHONE' });
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      'Welcome to Soroush+ Message Bot!\n\nPlease enter your Soroush+ phone number (e.g., 0912xxxxxxx):'
-    );
-    return;
-  }
+  const token = sessionData.token || tokenData;
+  const base = 'https://wslb2.soroush-hamrah.ir';
 
-  if (text === '/cancel') {
-    await clearUserState(env.BOT_KV, chatId);
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, 'Operation cancelled.');
-    return;
-  }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Authorization': `Bearer ${token}`,
+    'X-Access-Token': token,
+  };
 
-  if (text === '/logout') {
-    await clearUserState(env.BOT_KV, chatId);
-    await deleteSession(env.BOT_KV, chatId);
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, 'Logged out. Send /start to login again.');
-    return;
-  }
+  const resp = await fetch(`${base}/CAPI/Conversation/List/`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ Offset: 0, Limit: 50 }),
+  });
 
-  if (text === '/fetch') {
-    await handleFetch(env, chatId);
-    return;
-  }
+  if (!resp.ok) throw new Error(`API returned ${resp.status}`);
 
-  const state = await getUserState(env.BOT_KV, chatId);
-
-  switch (state.state) {
-    case 'AWAITING_PHONE':
-      await handlePhoneInput(env, chatId, text);
-      break;
-    case 'AWAITING_SMS':
-      await handleSmsInput(env, chatId, text);
-      break;
-    case 'IDLE':
-    case 'AUTHENTICATED':
-    default:
-      break;
-  }
+  const data: any = await resp.json();
+  const items = data.Conversations || data.conversations || data.Result || data.result || [];
+  return items.map((item: any) => ({
+    peerId: item.Id || item.id || item.ChatId || 0,
+    peerType: item.Type === '1' || item.Type === 'group' ? 2 : 1,
+    title: item.Name || item.name || item.Title || item.DisplayName || 'Unknown',
+    unreadCount: item.UnreadCount || item.unreadCount || item.Badge || 0,
+    lastMessageDate: item.LastMessageTime || item.Timestamp || 0,
+  }));
 }
 
-async function handlePhoneInput(env: Env, chatId: number, text: string) {
-  if (!isValidPhone(text)) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      'Invalid phone number format. Please enter a valid Iranian phone number (e.g., 0912xxxxxxx):'
-    );
-    return;
-  }
+async function loadHistory(tokenData: string, peerId: number, peerType: number, limit: number): Promise<any[]> {
+  let sessionData: any;
+  try { sessionData = JSON.parse(tokenData); } catch { sessionData = { token: tokenData }; }
 
-  const phone = normalizePhone(text);
-  await setUserState(env.BOT_KV, chatId, { phone });
+  const token = sessionData.token || tokenData;
+  const base = 'https://wslb2.soroush-hamrah.ir';
 
-  await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, 'Sending SMS code...');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Authorization': `Bearer ${token}`,
+    'X-Access-Token': token,
+  };
 
-  const result = await sendSMS(env.SPLUS_API_BASE, phone);
-  if (result.success) {
-    await setUserState(env.BOT_KV, chatId, { state: 'AWAITING_SMS' });
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      'SMS sent! Please enter the verification code you received:'
-    );
-  } else {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      `Failed to send SMS: ${result.error}\nPlease try again or check your phone number.`
-    );
-  }
-}
+  const path = peerType === 2 ? '/CAPI/Groupchat/WindowArchive/' : '/CAPI/Userchat/WindowArchive/';
+  const resp = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ChatId: peerId, Offset: 0, Limit: limit }),
+  });
 
-async function handleSmsInput(env: Env, chatId: number, text: string) {
-  if (!isValidCode(text)) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      'Invalid code format. Please enter a 4-6 digit code:'
-    );
-    return;
-  }
+  if (!resp.ok) throw new Error(`API returned ${resp.status}`);
 
-  const state = await getUserState(env.BOT_KV, chatId);
-  if (!state.phone) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, 'Session error. Send /start to try again.');
-    await clearUserState(env.BOT_KV, chatId);
-    return;
-  }
-
-  await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, 'Verifying code...');
-
-  const result = await verifyCode(env.SPLUS_API_BASE, state.phone, text.trim());
-  if (result.success && result.session) {
-    await saveSession(env.BOT_KV, chatId, result.session);
-    await setUserState(env.BOT_KV, chatId, { state: 'AUTHENTICATED' });
-    await sendInlineKeyboard(env.TELEGRAM_BOT_TOKEN, chatId,
-      'Login successful!',
-      [[{ text: 'Fetch Messages', callback_data: 'fetch' }]]
-    );
-  } else {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      `Verification failed: ${result.error}\nPlease try again or send /start to restart.`
-    );
-  }
-}
-
-async function handleCallbackQuery(env: Env, query: NonNullable<TelegramUpdate['callback_query']>) {
-  const chatId = query.message?.chat.id;
-  if (!chatId) return;
-
-  await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, query.id);
-
-  if (query.data === 'fetch') {
-    await handleFetch(env, chatId);
-  }
-}
-
-async function handleFetch(env: Env, chatId: number) {
-  const session = await getSession<SplusSession>(env.BOT_KV, chatId);
-  if (!session) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      'Not logged in. Send /start to login.'
-    );
-    return;
-  }
-
-  if (session.expiresAt < Date.now()) {
-    await deleteSession(env.BOT_KV, chatId);
-    await clearUserState(env.BOT_KV, chatId);
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      'Session expired. Send /start to login again.'
-    );
-    return;
-  }
-
-  await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, 'Fetching messages...');
-
-  try {
-    const [conversations, privateMessages, channelMessages] = await Promise.allSettled([
-      getConversationList(env.SPLUS_API_BASE, session),
-      getNewPrivateMessages(env.SPLUS_API_BASE, session),
-      getNewChannelMessages(env.SPLUS_API_BASE, session),
-    ]);
-
-    const allMessages = [
-      ...(privateMessages.status === 'fulfilled' ? privateMessages.value : []),
-      ...(channelMessages.status === 'fulfilled' ? channelMessages.value : []),
-    ];
-
-    const unreadConversations = conversations.status === 'fulfilled'
-      ? conversations.value.filter(c => c.unreadCount > 0)
-      : [];
-
-    if (allMessages.length === 0 && unreadConversations.length === 0) {
-      await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-        'No unread messages found.'
-      );
-      return;
-    }
-
-    let output = '';
-
-    if (unreadConversations.length > 0) {
-      output += `=== Chats with unread messages (${unreadConversations.length}) ===\n\n`;
-      for (const conv of unreadConversations.slice(0, 20)) {
-        output += `${conv.type === 'channel' ? '#' : conv.type === 'group' ? '&' : '@'} ${conv.name}\n`;
-        output += `  Unread: ${conv.unreadCount}`;
-        if (conv.lastMessage) output += ` | Last: ${conv.lastMessage.slice(0, 50)}`;
-        if (conv.lastMessageTime) output += `\n  Time: ${conv.lastMessageTime}`;
-        output += '\n\n';
-      }
-    }
-
-    if (allMessages.length > 0) {
-      output += `=== Messages (${allMessages.length}) ===\n\n`;
-      for (const msg of allMessages.slice(0, 50)) {
-        output += `Chat: ${msg.chat}\n`;
-        output += `From: ${msg.sender}\n`;
-        if (msg.timestamp) output += `Time: ${msg.timestamp}\n`;
-        output += `${msg.text}\n`;
-        output += '---\n\n';
-      }
-    }
-
-    const maxLen = 4000;
-    if (output.length <= maxLen) {
-      await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, output);
-    } else {
-      const chunks = splitMessage(output, maxLen);
-      for (const chunk of chunks) {
-        await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, chunk);
-      }
-    }
-
-    await sendInlineKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, 'Done!',
-      [[{ text: 'Refresh', callback_data: 'fetch' }]]
-    );
-  } catch (e) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId,
-      `Error fetching messages: ${(e as Error).message}`
-    );
-  }
-}
-
-function splitMessage(text: string, maxLen: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > maxLen) {
-    let splitAt = remaining.lastIndexOf('\n\n', maxLen);
-    if (splitAt <= 0) splitAt = remaining.lastIndexOf('\n', maxLen);
-    if (splitAt <= 0) splitAt = maxLen;
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).replace(/^\n+/, '');
-  }
-  if (remaining) chunks.push(remaining);
-  return chunks;
+  const data: any = await resp.json();
+  const items = data.Messages || data.messages || data.Result || data.result || data.Items || [];
+  return items.map((item: any) => ({
+    messageId: item.Id || item.MessageId || 0,
+    date: item.Timestamp || item.Date || item.SendDate || 0,
+    text: item.Text || item.Body || item.Content || '',
+    senderName: item.SenderName || item.From || item.Sender || 'Unknown',
+    chatId: peerId,
+    chatType: peerType,
+  }));
 }
