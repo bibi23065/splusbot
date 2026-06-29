@@ -25,25 +25,8 @@ function tg(method, body) {
   });
 }
 
-async function sendTg(text) {
-  if (!BOT_TOKEN || !CHAT_ID) { console.log(text); return; }
-  const chunks = [];
-  let rem = text;
-  while (rem.length > 4000) {
-    let split = rem.lastIndexOf('\n\n', 4000);
-    if (split <= 0) split = rem.lastIndexOf('\n', 4000);
-    if (split <= 0) split = 4000;
-    chunks.push(rem.slice(0, split));
-    rem = rem.slice(split).replace(/^\n+/, '');
-  }
-  if (rem) chunks.push(rem);
-  for (const c of chunks) {
-    await tg('sendMessage', { chat_id: Number(CHAT_ID), text: c });
-    await new Promise(r => setTimeout(r, 500));
-  }
-}
-
 async function postToWorker(data) {
+  if (!WORKER_URL) return;
   try {
     const resp = await fetch(`${WORKER_URL}/webhook/results`, {
       method: 'POST',
@@ -51,138 +34,142 @@ async function postToWorker(data) {
       body: JSON.stringify(data),
     });
     if (!resp.ok) {
-      const err = await resp.text();
-      console.error(`Worker webhook failed: ${resp.status} ${err}`);
-    } else {
-      console.log('Results posted to worker successfully');
+      console.error(`Worker webhook failed: ${resp.status}`);
     }
   } catch (e) {
     console.error(`Worker webhook error: ${e.message}`);
   }
 }
 
+async function sendErrorReport(chatId, errorMsg) {
+  if (WORKER_URL && chatId) {
+    await postToWorker({ chatId: Number(chatId), error: errorMsg, timestamp: Date.now() });
+  } else if (BOT_TOKEN && chatId) {
+    await tg('sendMessage', {
+      chat_id: Number(chatId),
+      text: `❌ *Script Error Report*\n\n\`${errorMsg}\``,
+      parse_mode: 'MarkdownV2',
+    });
+  }
+}
+
 async function main() {
-  if (!SESSION_JSON) { console.log('No session.'); return; }
+  if (!SESSION_JSON) {
+    console.log('No session.');
+    return;
+  }
 
   let sessionData;
   try { sessionData = JSON.parse(SESSION_JSON); } catch { sessionData = {}; }
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
-    defaultViewport: { width: 1280, height: 800 },
-  });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+      defaultViewport: { width: 1280, height: 800 },
+    });
 
-  const page = await browser.newPage();
+    const page = await browser.newPage();
 
-  await page.goto('https://web.splus.ir/', { waitUntil: 'networkidle2', timeout: 60000 });
-  await page.evaluate((data) => {
-    for (const [key, val] of Object.entries(data)) {
-      if (val != null) localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
-    }
-  }, sessionData);
-  await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
-
-  // Click "All" tab to show all chats
-  await page.evaluate(() => {
-    const tabs = document.querySelectorAll('.Tab');
-    for (const tab of tabs) {
-      if (tab.textContent?.includes('همه') || tab.textContent?.includes('All')) {
-        tab.click();
-        break;
+    await page.goto('https://web.splus.ir/', { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.evaluate((data) => {
+      for (const [key, val] of Object.entries(data)) {
+        if (val != null) localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
       }
-    }
-  });
-  await new Promise(r => setTimeout(r, 1000));
+    }, sessionData);
+    await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
 
-  // Scroll chat list to load all items, stop when count stabilizes
-  let prevCount = 0;
-  let stableRounds = 0;
-  for (let i = 0; i < 12; i++) {
+    // Click "All" tab to show all chats
     await page.evaluate(() => {
-      const list = document.querySelector('.chat-list');
-      if (list) list.scrollTop = list.scrollHeight;
+      const tabs = document.querySelectorAll('.Tab');
+      for (const tab of tabs) {
+        if (tab.textContent?.includes('همه') || tab.textContent?.includes('All')) {
+          tab.click();
+          break;
+        }
+      }
     });
     await new Promise(r => setTimeout(r, 1000));
-    const count = await page.evaluate(() => document.querySelectorAll('.chat-list .ListItem').length);
-    console.log(`Chat items loaded: ${count}`);
-    if (count === prevCount && count > 0) {
-      stableRounds++;
-      if (stableRounds >= 2) break;
-    } else {
-      stableRounds = 0;
+
+    // Scroll chat list to load all items, stop when count stabilizes
+    let prevCount = 0;
+    let stableRounds = 0;
+    for (let i = 0; i < 12; i++) {
+      await page.evaluate(() => {
+        const list = document.querySelector('.chat-list');
+        if (list) list.scrollTop = list.scrollHeight;
+      });
+      await new Promise(r => setTimeout(r, 1000));
+      const count = await page.evaluate(() => document.querySelectorAll('.chat-list .ListItem').length);
+      console.log(`Chat items loaded: ${count}`);
+      if (count === prevCount && count > 0) {
+        stableRounds++;
+        if (stableRounds >= 2) break;
+      } else {
+        stableRounds = 0;
+      }
+      prevCount = count;
     }
-    prevCount = count;
-  }
 
-  if (page.url().includes('auth') || page.url().includes('login')) {
-    await sendTg('Soroush+ session expired. Re-login needed.');
-    await browser.close();
-    return;
-  }
+    if (page.url().includes('auth') || page.url().includes('login')) {
+      const errorMsg = 'Soroush+ session expired. Re-login needed.';
+      console.error(errorMsg);
+      await sendErrorReport(CHAT_ID, errorMsg);
+      await browser.close();
+      return;
+    }
 
-  const unreadChats = await page.evaluate(() => {
-    const results = [];
-    document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
-      const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
-      const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
+    const unreadChats = await page.evaluate(() => {
+      const results = [];
+      document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
+        const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
+        const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
 
-      let unreadCount = 0;
+        let unreadCount = 0;
 
-      // Find leaf span elements containing only a number
-      item.querySelectorAll('span').forEach(span => {
-        if (span.children.length > 0) return;
-        const text = span.textContent?.trim();
-        if (!text || !/^\d+$/.test(text)) return;
-        const num = parseInt(text, 10);
-        if (num > 0 && num < 10000) {
-          // Make sure it's not part of a date or time
-          const parent = span.parentElement;
-          const parentText = parent?.textContent || '';
-          if (!parentText.match(/\d{1,2}:\d{2}/) && !parentText.match(/\d{1,2}\/\d{1,2}/)) {
-            unreadCount = Math.max(unreadCount, num);
+        item.querySelectorAll('span').forEach(span => {
+          if (span.children.length > 0) return;
+          const text = span.textContent?.trim();
+          if (!text || !/^\d+$/.test(text)) return;
+          const num = parseInt(text, 10);
+          if (num > 0 && num < 10000) {
+            const parent = span.parentElement;
+            const parentText = parent?.textContent || '';
+            if (!parentText.match(/\d{1,2}:\d{2}/) && !parentText.match(/\d{1,2}\/\d{1,2}/)) {
+              unreadCount = Math.max(unreadCount, num);
+            }
+          }
+        });
+
+        if (unreadCount === 0) {
+          const match = item.innerText.match(/(\d+)\s*$/);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > 0 && num < 10000) unreadCount = num;
           }
         }
+
+        if (unreadCount <= 0) return;
+        results.push({ title, unreadCount, preview: preview.slice(0, 500) });
       });
-
-      // Fallback: trailing number in the item's full text
-      if (unreadCount === 0) {
-        const match = item.innerText.match(/(\d+)\s*$/);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (num > 0 && num < 10000) unreadCount = num;
-        }
-      }
-
-      if (unreadCount <= 0) return;
-      results.push({ title, unreadCount, preview: preview.slice(0, 500) });
+      return results;
     });
-    return results;
-  });
 
-  await browser.close();
+    await browser.close();
 
-  if (unreadChats.length === 0) {
-    if (WORKER_URL && CHAT_ID) {
+    if (unreadChats.length === 0) {
       await postToWorker({ chatId: Number(CHAT_ID), chats: [], timestamp: Date.now() });
-    } else {
-      await sendTg('No unread messages.');
+      return;
     }
-    return;
-  }
 
-  if (WORKER_URL && CHAT_ID) {
     await postToWorker({ chatId: Number(CHAT_ID), chats: unreadChats, timestamp: Date.now() });
-  } else {
-    let msg = `Soroush+ Unread (${unreadChats.length} chats):\n\n`;
-    for (const chat of unreadChats) {
-      msg += `${chat.title} (${chat.unreadCount} unread)\n`;
-      if (chat.preview) msg += `  > ${chat.preview}\n`;
-      msg += '\n';
-    }
-    console.log(msg);
-    await sendTg(msg);
+  } catch (e) {
+    console.error('Script error:', e.message);
+    await sendErrorReport(CHAT_ID, e.message);
+    if (browser) await browser.close().catch(() => {});
+    process.exit(1);
   }
 }
 
-main().catch(e => { console.error('Error:', e.message); process.exit(1); });
+main();

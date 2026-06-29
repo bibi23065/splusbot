@@ -6,13 +6,15 @@ export interface Env {
 
 export type BotState = 'UNAUTHENTICATED' | 'AWAITING_TOKEN' | 'AUTHENTICATED';
 
-export interface SplusMessage {
-  chatTitle: string;
-  unreadCount: number;
-}
-
 export interface SplusUnreadChat {
   title: string;
   unreadCount: number;
   preview: string;
+}
+
+export interface BotStatus {
+  lastRun: number;
+  totalMessages: number;
+  lastError: string | null;
+  sessionValid: boolean;
 }

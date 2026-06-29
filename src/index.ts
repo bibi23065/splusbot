@@ -1,8 +1,13 @@
-import type { Env, SplusUnreadChat } from './types';
+import type { Env, SplusUnreadChat, BotStatus } from './types';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 const GITHUB_REPO = 'bibi23065/splusbot';
 const GITHUB_WORKFLOW = 'check-messages.yml';
+const SPLUS_WEB_URL = 'https://web.splus.ir';
+
+function escapeMarkdownV2(text: string): string {
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
 
 async function sendMsg(chatId: number, text: string, replyMarkup?: any, botToken?: string, parseMode?: string) {
   if (!botToken) return;
@@ -20,6 +25,7 @@ async function editMsg(chatId: number, messageId: number, text: string, replyMar
   if (!botToken) return;
   const body: any = { chat_id: chatId, message_id: messageId, text };
   if (replyMarkup) body.reply_markup = JSON.stringify(replyMarkup);
+  body.parse_mode = 'MarkdownV2';
   await fetch(`${TELEGRAM_API}/bot${botToken}/editMessageText`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -36,10 +42,6 @@ async function answerCallback(callbackQueryId: string, botToken?: string) {
   });
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 async function getState(kv: KVNamespace, chatId: number): Promise<{ state: string }> {
   const data = await kv.get<{ state: string }>(`splusbot:state:${chatId}`, 'json');
   return data || { state: 'UNAUTHENTICATED' };
@@ -47,6 +49,16 @@ async function getState(kv: KVNamespace, chatId: number): Promise<{ state: strin
 
 async function setState(kv: KVNamespace, chatId: number, state: any) {
   await kv.put(`splusbot:state:${chatId}`, JSON.stringify(state));
+}
+
+async function getBotStatus(kv: KVNamespace, chatId: number): Promise<BotStatus> {
+  const raw = await kv.get<BotStatus>(`splusbot:status:${chatId}`, 'json');
+  return raw || { lastRun: 0, totalMessages: 0, lastError: null, sessionValid: false };
+}
+
+async function updateBotStatus(kv: KVNamespace, chatId: number, updates: Partial<BotStatus>) {
+  const current = await getBotStatus(kv, chatId);
+  await kv.put(`splusbot:status:${chatId}`, JSON.stringify({ ...current, ...updates }));
 }
 
 async function triggerGitHubWorkflow(githubToken: string): Promise<{ success: boolean; error?: string }> {
@@ -67,19 +79,6 @@ async function triggerGitHubWorkflow(githubToken: string): Promise<{ success: bo
   return { success: true };
 }
 
-async function getLatestRun(githubToken: string): Promise<any> {
-  const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=1`, {
-    headers: {
-      'Authorization': `token ${githubToken}`,
-      'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'splusbot-worker',
-    },
-  });
-  if (!resp.ok) return null;
-  const data: any = await resp.json();
-  return data.workflow_runs?.[0] || null;
-}
-
 function truncateButtonLabel(title: string, count: number): string {
   const label = `${title} (${count})`;
   const bytes = new TextEncoder().encode(label).length;
@@ -98,30 +97,75 @@ function truncateButtonLabel(title: string, count: number): string {
 
 function buildUnreadMessage(chats: SplusUnreadChat[]): { text: string; keyboard: any } {
   if (chats.length === 0) {
-    return { text: 'No unread messages.', keyboard: { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] } };
+    return {
+      text: '📬 *No unread messages*',
+      keyboard: { inline_keyboard: [[{ text: '🔄 Refresh', callback_data: 'refresh' }], [{ text: '📊 Status', callback_data: 'status' }]] },
+    };
   }
 
-  const text = `📬 Soroush+ Unread (${chats.length} chats)\nTap a chat to see its preview:`;
+  const text = `📬 *Soroush\\+ Unread* \\(${chats.length} chats\\)\nTap a chat to see its preview:`;
 
   const rows: any[][] = [];
   for (let i = 0; i < chats.length; i++) {
     rows.push([{ text: truncateButtonLabel(chats[i].title, chats[i].unreadCount), callback_data: `chat:${i}` }]);
   }
-  rows.push([{ text: '🔄 Refresh', callback_data: 'refresh' }]);
+  rows.push([
+    { text: '🔄 Refresh', callback_data: 'refresh' },
+    { text: '📊 Status', callback_data: 'status' },
+  ]);
 
   return { text, keyboard: { inline_keyboard: rows } };
 }
 
 function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; keyboard: any } {
-  const preview = chat.preview || 'No preview available.';
+  const name = escapeMarkdownV2(chat.title);
+  const unread = String(chat.unreadCount);
+  const preview = escapeMarkdownV2(chat.preview || 'No preview available.');
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
   const text = [
-    `💬 ${chat.title}`,
-    `📩 ${chat.unreadCount} unread`,
-    '',
-    `Last message:\n${escapeHtml(preview)}`,
+    `💬 *New Message from Soroush*`,
+    ``,
+    `👤 *Sender:* ${name}`,
+    `📩 *Unread:* ${unread}`,
+    `🕒 *Time:* \`${time}\``,
+    ``,
+    `───────────────────`,
+    ``,
+    preview,
+    ``,
+    `───────────────────`,
+    `[🌐 Open Soroush Web](${SPLUS_WEB_URL})`,
   ].join('\n');
 
   const keyboard = { inline_keyboard: [[{ text: '← Back', callback_data: 'back' }]] };
+  return { text, keyboard };
+}
+
+function buildStatusMessage(status: BotStatus, sessionExists: boolean): { text: string; keyboard: any } {
+  const connectionStatus = sessionExists ? '✅ Active' : '❌ Inactive';
+  const sessionStatus = status.sessionValid ? '✅ Valid' : '⚠️ Unknown';
+  const lastRun = status.lastRun ? new Date(status.lastRun).toLocaleString('en-US', { timeZone: 'Asia/Tehran' }) : 'Never';
+  const total = String(status.totalMessages);
+  const lastError = status.lastError ? escapeMarkdownV2(status.lastError.slice(0, 100)) : 'None';
+
+  const text = [
+    `📊 *Bot Status Dashboard*`,
+    ``,
+    `🔌 *Connection:* ${connectionStatus}`,
+    `🔑 *Session:* ${sessionStatus}`,
+    `🕐 *Last Run:* \`${lastRun}\``,
+    `📬 *Messages Forwarded:* ${total}`,
+    `❌ *Last Error:* ${lastError}`,
+  ].join('\n');
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🔄 Refresh', callback_data: 'refresh' }],
+      [{ text: '← Back', callback_data: 'back' }],
+    ],
+  };
   return { text, keyboard };
 }
 
@@ -129,18 +173,40 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.method === 'GET') return new Response('SplusBot v5', { status: 200 });
+    if (request.method === 'GET') return new Response('SplusBot v6', { status: 200 });
 
     if (request.method === 'POST' && url.pathname === '/webhook/results') {
       try {
-        const data = await request.json() as { chatId: number; chats: SplusUnreadChat[]; timestamp: number };
+        const data = await request.json() as { chatId: number; chats: SplusUnreadChat[]; timestamp: number; error?: string };
+        const botToken = env.TELEGRAM_BOT_TOKEN;
+
+        if (data.error) {
+          const errorText = [
+            `❌ *Script Error Report*`,
+            ``,
+            `\`${escapeMarkdownV2(data.error)}\``,
+            ``,
+            `Check [GitHub Actions logs](https://github.com/${GITHUB_REPO}/actions) for details.`,
+          ].join('\n');
+          await sendMsg(data.chatId, errorText, undefined, botToken, 'MarkdownV2');
+          await updateBotStatus(env.KV, data.chatId, { lastError: data.error, lastRun: data.timestamp });
+          return new Response('ok', { status: 200 });
+        }
+
         if (!data.chatId || !data.chats) return new Response('bad request', { status: 400 });
 
         await env.KV.put(`splusbot:unread:${data.chatId}`, JSON.stringify(data.chats), { expirationTtl: 3600 });
 
-        const botToken = env.TELEGRAM_BOT_TOKEN;
         const { text, keyboard } = buildUnreadMessage(data.chats);
-        await sendMsg(data.chatId, text, keyboard, botToken);
+        await sendMsg(data.chatId, text, keyboard, botToken, 'MarkdownV2');
+
+        const currentStatus = await getBotStatus(env.KV, data.chatId);
+        await updateBotStatus(env.KV, data.chatId, {
+          lastRun: data.timestamp,
+          totalMessages: currentStatus.totalMessages + data.chats.reduce((sum, c) => sum + c.unreadCount, 0),
+          lastError: null,
+          sessionValid: true,
+        });
 
         return new Response('ok', { status: 200 });
       } catch {
@@ -160,6 +226,20 @@ export default {
       const botToken = env.TELEGRAM_BOT_TOKEN;
 
       if (callbackQueryId) {
+        if (text === 'status') {
+          const session = await env.KV.get(`splusbot:session:${chatId}`);
+          const status = await getBotStatus(env.KV, chatId);
+          status.sessionValid = !!session;
+          const { text: statusText, keyboard } = buildStatusMessage(status, !!session);
+          const msgId = update.callback_query?.message?.message_id;
+          if (msgId) {
+            await editMsg(chatId, msgId, statusText, keyboard, botToken);
+          } else {
+            await sendMsg(chatId, statusText, keyboard, botToken, 'MarkdownV2');
+          }
+          return new Response('ok', { status: 200 });
+        }
+
         if (text === 'refresh') {
           const githubToken = env.GITHUB_TOKEN;
           if (!githubToken) {
@@ -169,13 +249,13 @@ export default {
           const session = await env.KV.get(`splusbot:session:${chatId}`);
           if (!session) {
             await setState(env.KV, chatId, { state: 'UNAUTHENTICATED' });
-            await sendMsg(chatId, 'Session expired. Send /start to re-login.', undefined, botToken);
+            await sendMsg(chatId, 'Session expired. Send /start to re\\-login.', undefined, botToken, 'MarkdownV2');
             return new Response('ok', { status: 200 });
           }
-          await sendMsg(chatId, 'Checking messages...', undefined, botToken);
+          await sendMsg(chatId, '⏳ Checking messages\\.', undefined, botToken, 'MarkdownV2');
           const result = await triggerGitHubWorkflow(githubToken);
           if (!result.success) {
-            await sendMsg(chatId, `Failed to trigger check: ${result.error}`, undefined, botToken);
+            await sendMsg(chatId, `Failed to trigger check: ${escapeMarkdownV2(result.error || 'unknown')}`, undefined, botToken, 'MarkdownV2');
           }
           return new Response('ok', { status: 200 });
         }
@@ -188,10 +268,10 @@ export default {
             if (msgId) {
               await editMsg(chatId, msgId, msgText, keyboard, botToken);
             } else {
-              await sendMsg(chatId, msgText, keyboard, botToken);
+              await sendMsg(chatId, msgText, keyboard, botToken, 'MarkdownV2');
             }
           } else {
-            await sendMsg(chatId, 'No cached data. Click Refresh to check.', { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] }, botToken);
+            await sendMsg(chatId, 'No cached data\\. Click Refresh\\.', { inline_keyboard: [[{ text: '🔄 Refresh', callback_data: 'refresh' }]] }, botToken, 'MarkdownV2');
           }
           return new Response('ok', { status: 200 });
         }
@@ -205,10 +285,10 @@ export default {
             if (msgId) {
               await editMsg(chatId, msgId, detailText, keyboard, botToken);
             } else {
-              await sendMsg(chatId, detailText, keyboard, botToken);
+              await sendMsg(chatId, detailText, keyboard, botToken, 'MarkdownV2');
             }
           } else {
-            await sendMsg(chatId, 'Chat data expired. Click Refresh.', { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] }, botToken);
+            await sendMsg(chatId, 'Chat data expired\\. Click Refresh\\.', { inline_keyboard: [[{ text: '🔄 Refresh', callback_data: 'refresh' }]] }, botToken, 'MarkdownV2');
           }
           return new Response('ok', { status: 200 });
         }
@@ -219,23 +299,34 @@ export default {
       switch (state.state) {
         case 'UNAUTHENTICATED': {
           if (text === '/start') {
-            const kb = { inline_keyboard: [[{ text: 'Login to Soroush+', callback_data: 'login_splus' }]] };
-            await sendMsg(chatId, 'Welcome! Click below to login.', kb, botToken);
+            const kb = {
+              inline_keyboard: [
+                [{ text: '🔐 Login to Soroush+', callback_data: 'login_splus' }],
+                [{ text: '📊 Status', callback_data: 'status' }],
+              ],
+            };
+            const welcomeText = [
+              `👋 *Welcome to SplusBot*`,
+              ``,
+              `I forward your unread Soroush\\+ messages to Telegram\\.`,
+              `Click below to login\\.`,
+            ].join('\n');
+            await sendMsg(chatId, welcomeText, kb, botToken, 'MarkdownV2');
           } else if (text === 'login_splus') {
             await setState(env.KV, chatId, { state: 'AWAITING_TOKEN' });
             const instructions = [
-              'To get your session token:',
-              '',
-              '1. Run extract-session.mjs locally:',
-              '   node extract-session.mjs',
-              '',
-              '2. It opens a browser. Log in to Soroush+.',
-              '',
-              '3. After login, press Enter in the terminal.',
-              '',
-              '4. Copy the JSON output and paste it below:',
+              `🔑 *Session Setup*`,
+              ``,
+              `1\\. Run extract\\-session\\.mjs locally:`,
+              `   \`node extract-session.mjs\``,
+              ``,
+              `2\\. It opens a browser\\. Log in to Soroush\\+\\.`,
+              ``,
+              `3\\. After login, press Enter in the terminal\\.`,
+              ``,
+              `4\\. Copy the JSON output and paste it below:`,
             ].join('\n');
-            await sendMsg(chatId, instructions, undefined, botToken);
+            await sendMsg(chatId, instructions, undefined, botToken, 'MarkdownV2');
           }
           break;
         }
@@ -245,24 +336,30 @@ export default {
             try {
               JSON.parse(text);
             } catch {
-              await sendMsg(chatId, 'Invalid JSON. Paste the full session data.', undefined, botToken);
+              await sendMsg(chatId, 'Invalid JSON\\. Paste the full session data\\.', undefined, botToken, 'MarkdownV2');
               break;
             }
 
-            const kb = { inline_keyboard: [[{ text: 'Check Messages', callback_data: 'check_now' }]] };
+            const kb = {
+              inline_keyboard: [
+                [{ text: '📬 Check Messages', callback_data: 'check_now' }],
+                [{ text: '📊 Status', callback_data: 'status' }],
+              ],
+            };
 
             try {
-              const run = await getLatestRun(env.GITHUB_TOKEN);
               await env.KV.put(`splusbot:session:${chatId}`, text);
               await setState(env.KV, chatId, { state: 'AUTHENTICATED' });
-              await sendMsg(chatId, 'Session stored! Click below to check unread messages.', kb, botToken);
+              await updateBotStatus(env.KV, chatId, { sessionValid: true });
+              await sendMsg(chatId, '✅ *Session stored\\!* Click below to check unread messages\\.', kb, botToken, 'MarkdownV2');
             } catch (e: any) {
               await env.KV.put(`splusbot:session:${chatId}`, text);
               await setState(env.KV, chatId, { state: 'AUTHENTICATED' });
-              await sendMsg(chatId, 'Session stored. Click below to check unread messages.', kb, botToken);
+              await updateBotStatus(env.KV, chatId, { sessionValid: true });
+              await sendMsg(chatId, '✅ *Session stored\\.* Click below to check unread messages\\.', kb, botToken, 'MarkdownV2');
             }
           } else {
-            await sendMsg(chatId, 'Invalid token. Paste the full session JSON.', undefined, botToken);
+            await sendMsg(chatId, 'Invalid token\\. Paste the full session JSON\\.', undefined, botToken, 'MarkdownV2');
           }
           break;
         }
@@ -271,27 +368,34 @@ export default {
           if (text === 'check_now' || text === '/fetch') {
             const githubToken = env.GITHUB_TOKEN;
             if (!githubToken) {
-              await sendMsg(chatId, 'GitHub token not configured. Send /start to re-login.', undefined, botToken);
+              await sendMsg(chatId, 'GitHub token not configured\\. Send /start to re\\-login\\.', undefined, botToken, 'MarkdownV2');
               break;
             }
 
             const session = await env.KV.get(`splusbot:session:${chatId}`);
             if (!session) {
               await setState(env.KV, chatId, { state: 'UNAUTHENTICATED' });
-              await sendMsg(chatId, 'Session expired. Send /start to re-login.', undefined, botToken);
+              await sendMsg(chatId, 'Session expired\\. Send /start to re\\-login\\.', undefined, botToken, 'MarkdownV2');
               break;
             }
 
-            await sendMsg(chatId, 'Checking messages...', undefined, botToken);
+            await sendMsg(chatId, '⏳ Checking messages\\.', undefined, botToken, 'MarkdownV2');
 
             const result = await triggerGitHubWorkflow(githubToken);
             if (!result.success) {
-              await sendMsg(chatId, `Failed to trigger check: ${result.error}`, undefined, botToken);
+              await sendMsg(chatId, `Failed to trigger check: ${escapeMarkdownV2(result.error || 'unknown')}`, undefined, botToken, 'MarkdownV2');
             }
+          } else if (text === '/status') {
+            const session = await env.KV.get(`splusbot:session:${chatId}`);
+            const status = await getBotStatus(env.KV, chatId);
+            status.sessionValid = !!session;
+            const { text: statusText, keyboard } = buildStatusMessage(status, !!session);
+            await sendMsg(chatId, statusText, keyboard, botToken, 'MarkdownV2');
           } else if (text === '/logout') {
             await env.KV.delete(`splusbot:session:${chatId}`);
             await setState(env.KV, chatId, { state: 'UNAUTHENTICATED' });
-            await sendMsg(chatId, 'Logged out. Send /start to login again.', undefined, botToken);
+            await updateBotStatus(env.KV, chatId, { sessionValid: false });
+            await sendMsg(chatId, 'Logged out\\. Send /start to login again\\.', undefined, botToken, 'MarkdownV2');
           }
           break;
         }
