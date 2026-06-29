@@ -94,13 +94,41 @@ async function main() {
   const unreadChats = await page.evaluate(() => {
     const results = [];
     document.querySelectorAll('.chat-list .ListItem').forEach((item, index) => {
+      // Check multiple indicators of unread status
+      let unreadCount = 0;
+
+      // Method 1: badge/counter elements
       const badge = item.querySelector('.badge, [class*="unread"], [class*="counter"], [class*="Badge"]');
-      if (!badge) return;
-      const count = parseInt(badge.textContent?.trim() || '0', 10);
-      if (count <= 0) return;
+      if (badge) {
+        unreadCount = parseInt(badge.textContent?.trim() || '0', 10);
+      }
+
+      // Method 2: bold/unread title styling
+      if (unreadCount === 0) {
+        const title = item.querySelector('.title');
+        if (title) {
+          const style = window.getComputedStyle(title);
+          if (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 600) {
+            unreadCount = 1;
+          }
+        }
+      }
+
+      // Method 3: check for any numeric badge in the item
+      if (unreadCount === 0) {
+        const allText = item.innerText;
+        const match = allText.match(/(\d+)\s*$/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > 0 && num < 10000) unreadCount = num;
+        }
+      }
+
+      if (unreadCount <= 0) return;
+
       const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
       const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
-      results.push({ title, unreadCount: count, preview: preview.slice(0, 250) });
+      results.push({ title, unreadCount, preview: preview.slice(0, 250) });
     });
     return results;
   });
