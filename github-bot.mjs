@@ -66,11 +66,19 @@ async function main() {
   try {
     browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+        '--lang=fa-IR', '--timezone=Asia/Tehran',
+      ],
       defaultViewport: { width: 1280, height: 800 },
     });
 
     const page = await browser.newPage();
+
+    // Force Iran timezone
+    const client = await page.createCDPSession();
+    await client.send('Emulation.setTimezoneOverride', { timezoneId: 'Asia/Tehran' });
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'fa-IR,fa;q=0.9' });
 
     await page.goto('https://web.splus.ir/', { waitUntil: 'networkidle2', timeout: 60000 });
     await page.evaluate((data) => {
