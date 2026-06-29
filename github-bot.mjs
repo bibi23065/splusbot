@@ -155,7 +155,14 @@ async function main() {
 
         function extractFileSize() {
           const size = text.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB)\b)/i);
-          return size ? size[1] : null;
+          if (size) return size[1];
+          const sizeEl = lastMsg.querySelector('[class*="size"], [class*="Size"], [class*="fileInfo"], [class*="file-info"], [class*="meta"]');
+          if (sizeEl) {
+            const s = sizeEl.textContent?.trim();
+            const m = s?.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB)\b)/i);
+            if (m) return m[1];
+          }
+          return null;
         }
 
         function fileHasSize() {
