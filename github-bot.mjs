@@ -148,25 +148,34 @@ async function main() {
           return clone.textContent?.trim() || '';
         }
 
+        function toEnglishDigits(str) {
+          return str.replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+        }
+
         function extractDuration() {
-          const dur = text.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+          const normalized = toEnglishDigits(text);
+          const dur = normalized.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
           return dur ? dur[1] : null;
         }
 
         function extractFileSize() {
-          const size = text.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB)\b)/i);
+          const normalized = toEnglishDigits(text);
+          let size = normalized.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB)\b)/i);
+          if (size) return size[1];
+          size = normalized.match(/(\d+\.?\d*\s*(?:کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b)/i);
           if (size) return size[1];
           const sizeEl = lastMsg.querySelector('[class*="size"], [class*="Size"], [class*="fileInfo"], [class*="file-info"], [class*="meta"]');
           if (sizeEl) {
-            const s = sizeEl.textContent?.trim();
-            const m = s?.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB)\b)/i);
-            if (m) return m[1];
+            const elText = toEnglishDigits(sizeEl.textContent?.trim() || '');
+            size = elText.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB|کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b)/i);
+            if (size) return size[1];
           }
           return null;
         }
 
         function fileHasSize() {
-          return /\d+\.?\d*\s*(KB|MB|GB|B)\b/i.test(text);
+          const normalized = toEnglishDigits(text);
+          return /\d+\.?\d*\s*(KB|MB|GB|B|TB|کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b/i.test(normalized);
         }
         function fileHasExt() {
           return /\.\w{1,10}(\s|$)/.test(text) && /\.(pdf|zip|docx?|xlsx?|pptx?|rar|7z|txt|csv|apk|exe|json|xml|yaml|yml|md|py|js|ts|html|css|log|sql|sh|bat|c|cpp|h|java|rb|php|swift|kt|rs|go)\b/i.test(text);
