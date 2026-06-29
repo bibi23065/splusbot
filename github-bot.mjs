@@ -93,41 +93,46 @@ async function main() {
 
   const unreadChats = await page.evaluate(() => {
     const results = [];
-    document.querySelectorAll('.chat-list .ListItem').forEach((item, index) => {
-      // Check multiple indicators of unread status
+    document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
+      const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
+      const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
+
+      // Method 1: Find badge with numeric content (unread count)
+      const badges = item.querySelectorAll('[class*="badge"], [class*="unread"], [class*="counter"]');
       let unreadCount = 0;
-
-      // Method 1: badge/counter elements
-      const badge = item.querySelector('.badge, [class*="unread"], [class*="counter"], [class*="Badge"]');
-      if (badge) {
-        unreadCount = parseInt(badge.textContent?.trim() || '0', 10);
-      }
-
-      // Method 2: bold/unread title styling
-      if (unreadCount === 0) {
-        const title = item.querySelector('.title');
-        if (title) {
-          const style = window.getComputedStyle(title);
-          if (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 600) {
-            unreadCount = 1;
-          }
+      for (const badge of badges) {
+        const num = parseInt(badge.textContent?.trim(), 10);
+        if (num > 0 && num < 10000) {
+          unreadCount = num;
+          break;
         }
       }
 
-      // Method 3: check for any numeric badge in the item
+      // Method 2: Check trailing number in the item text
       if (unreadCount === 0) {
-        const allText = item.innerText;
-        const match = allText.match(/(\d+)\s*$/);
+        const text = item.innerText;
+        const match = text.match(/(\d+)\s*$/);
         if (match) {
           const num = parseInt(match[1], 10);
           if (num > 0 && num < 10000) unreadCount = num;
         }
       }
 
-      if (unreadCount <= 0) return;
+      // Method 3: Check for visible badge element with content
+      if (unreadCount === 0) {
+        for (const badge of badges) {
+          const style = window.getComputedStyle(badge);
+          if (style.display !== 'none' && style.visibility !== 'hidden') {
+            const text = badge.textContent?.trim();
+            if (text && text.length > 0 && text.length < 10) {
+              const num = parseInt(text, 10);
+              if (num > 0) unreadCount = num;
+            }
+          }
+        }
+      }
 
-      const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
-      const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
+      if (unreadCount <= 0) return;
       results.push({ title, unreadCount, preview: preview.slice(0, 250) });
     });
     return results;
