@@ -64,8 +64,26 @@ async function main() {
   }, sessionData);
   await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
 
-  await page.waitForFunction(() => document.querySelectorAll('.chat-list .ListItem').length > 0, { timeout: 30000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 2000));
+  // Wait for chat list to be stable (no new items loading)
+  let prevCount = 0;
+  let stableRounds = 0;
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const count = await page.evaluate(() => document.querySelectorAll('.chat-list .ListItem').length);
+    console.log(`Chat items loaded: ${count}`);
+    if (count === prevCount && count > 0) {
+      stableRounds++;
+      if (stableRounds >= 2) break;
+    } else {
+      stableRounds = 0;
+    }
+    prevCount = count;
+    // Scroll chat list to trigger lazy loading
+    await page.evaluate(() => {
+      const list = document.querySelector('.chat-list');
+      if (list) list.scrollTop = list.scrollHeight;
+    });
+  }
 
   if (page.url().includes('auth') || page.url().includes('login')) {
     await sendTg('Soroush+ session expired. Re-login needed.');
