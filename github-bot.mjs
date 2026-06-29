@@ -129,10 +129,12 @@ async function main() {
     }
 
     const unreadChats = await page.evaluate(() => {
-      function extractPreview(lastMsg) {
+      function extractPreview(lastMsg, chatItem) {
         if (!lastMsg) return { type: '💬 Text', preview: '' };
         const text = lastMsg.textContent?.trim() || '';
         const inner = lastMsg.innerHTML || '';
+        const fullItemText = chatItem ? (chatItem.textContent || '') : '';
+        const fullItemInner = chatItem ? (chatItem.innerHTML || '') : '';
 
         function hasClass(patterns) {
           return patterns.some(p => inner.toLowerCase().includes(p.toLowerCase()));
@@ -164,11 +166,16 @@ async function main() {
           if (size) return size[1];
           size = normalized.match(/(\d+\.?\d*\s*(?:کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b)/i);
           if (size) return size[1];
-          const sizeEl = lastMsg.querySelector('[class*="size"], [class*="Size"], [class*="fileInfo"], [class*="file-info"], [class*="meta"]');
-          if (sizeEl) {
-            const elText = toEnglishDigits(sizeEl.textContent?.trim() || '');
-            size = elText.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB|کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b)/i);
-            if (size) return size[1];
+          const fullNormalized = toEnglishDigits(fullItemText);
+          size = fullNormalized.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB|کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b)/i);
+          if (size) return size[1];
+          if (chatItem) {
+            const sizeEl = chatItem.querySelector('[class*="size"], [class*="Size"], [class*="fileInfo"], [class*="file-info"], [class*="meta"], [class*="detail"], [class*="Detail"]');
+            if (sizeEl) {
+              const elText = toEnglishDigits(sizeEl.textContent?.trim() || '');
+              size = elText.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB|کیلوبایت|مگابایت|گیگابایت|بایت|تراوبایت)\b)/i);
+              if (size) return size[1];
+            }
           }
           return null;
         }
@@ -240,7 +247,7 @@ async function main() {
       document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
         const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
         const lastMsg = item.querySelector('.last-message');
-        const { type: msgType, preview: rawPreview } = extractPreview(lastMsg);
+        const { type: msgType, preview: rawPreview } = extractPreview(lastMsg, item);
         const preview = rawPreview.slice(0, 500);
 
         // Extract timestamp from chat item
