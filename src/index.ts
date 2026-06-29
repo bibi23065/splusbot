@@ -128,7 +128,7 @@ function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; 
     ``,
     `👤 *Sender:* ${name}`,
     `📩 *Unread:* ${unread}`,
-    `🕒 *Time:* \`${time}\``,
+    `🕒 *Time:* \`${time} IRST\``,
     ``,
     `───────────────────`,
     ``,

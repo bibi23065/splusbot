@@ -128,11 +128,26 @@ async function main() {
 
         // Extract timestamp from chat item
         let time = '';
-        const timeEl = item.querySelector('.time') || item.querySelector('[class*="time"]') || item.querySelector('[class*="date"]');
-        if (timeEl) {
-          time = timeEl.textContent?.trim() || '';
+        // Try multiple selectors for the time element
+        const selectors = ['.time', '.DateTime', '[class*="time"]', '[class*="Time"]', '[class*="date"]', '[class*="Date"]'];
+        for (const sel of selectors) {
+          const el = item.querySelector(sel);
+          if (el) {
+            const t = el.textContent?.trim();
+            if (t && t.length < 20) { time = t; break; }
+          }
         }
-        // Fallback: look for time patterns in the item text
+        // Fallback: find time pattern like "14:30" or "دیروز" or date patterns
+        if (!time) {
+          const spans = item.querySelectorAll('span');
+          for (const span of spans) {
+            const t = span.textContent?.trim();
+            if (t && /^\d{1,2}:\d{2}$/.test(t)) { time = t; break; }
+            if (t && /^دیروز$/.test(t)) { time = t; break; }
+            if (t && /^\d{1,2}[\/\-]\d{1,2}$/.test(t)) { time = t; break; }
+          }
+        }
+        // Last fallback: scan full item text
         if (!time) {
           const fullText = item.innerText || '';
           const timeMatch = fullText.match(/(\d{1,2}:\d{2})/);
