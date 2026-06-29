@@ -131,18 +131,26 @@ async function main() {
     const unreadChats = await page.evaluate(() => {
       function extractPreview(lastMsg) {
         if (!lastMsg) return '';
-        const mediaTypes = [];
-        if (lastMsg.querySelector('img')) mediaTypes.push('📷 Image');
-        if (lastMsg.querySelector('video')) mediaTypes.push('🎥 Video');
-        if (lastMsg.querySelector('[class*="file"], [class*="document"], [class*="attachment"]')) mediaTypes.push('📄 File');
-        if (lastMsg.querySelector('audio, [class*="voice"], [class*="audio"]')) mediaTypes.push('🎙️ Voice');
-        if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"]')) mediaTypes.push('🎨 Sticker');
+        let mediaType = null;
+
+        if (lastMsg.querySelector('video, [class*="video-player"], [class*="VideoPlayer"], [class*="videoPreview"]')) {
+          mediaType = '🎥 Video';
+        } else if (lastMsg.querySelector('[class*="file-info"], [class*="FileInfo"], [class*="download"], [class*="Download"], [class*="document"]')) {
+          mediaType = '📄 File';
+        } else if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"], [class*="animated"]')) {
+          mediaType = '✨ Sticker';
+        } else if (lastMsg.querySelector('audio, [class*="voice"], [class*="audio"], [class*="Voice"]')) {
+          mediaType = '🎙️ Voice';
+        } else if (lastMsg.querySelector('img')) {
+          mediaType = '📷 Image';
+        }
+
         const clone = lastMsg.cloneNode(true);
-        clone.querySelectorAll('img, video, audio, svg, [class*="file"], [class*="voice"]').forEach(el => el.remove());
+        clone.querySelectorAll('img, video, audio, svg, [class*="file"], [class*="voice"], [class*="sticker"], [class*="download"]').forEach(el => el.remove());
         const caption = clone.textContent?.trim() || '';
-        if (mediaTypes.length > 0) {
-          const typeLabel = mediaTypes.join(', ');
-          return caption ? `${typeLabel}: ${caption}` : typeLabel;
+
+        if (mediaType) {
+          return caption ? `${mediaType}: ${caption}` : mediaType;
         }
         return caption || lastMsg.textContent?.trim() || '';
       }
