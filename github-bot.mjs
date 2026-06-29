@@ -164,7 +164,7 @@ async function main() {
       }
 
       if (unreadCount <= 0) return;
-      results.push({ title, unreadCount, preview: preview.slice(0, 250) });
+      results.push({ title, unreadCount, preview: preview.slice(0, 500) });
     });
     return results;
   });

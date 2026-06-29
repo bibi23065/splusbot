@@ -80,37 +80,48 @@ async function getLatestRun(githubToken: string): Promise<any> {
   return data.workflow_runs?.[0] || null;
 }
 
+function truncateButtonLabel(title: string, count: number): string {
+  const label = `${title} (${count})`;
+  const bytes = new TextEncoder().encode(label).length;
+  if (bytes <= 60) return label;
+  const maxTitleBytes = 60 - new TextEncoder().encode(` (${count})`).length;
+  let truncated = '';
+  let running = 0;
+  for (const char of title) {
+    const charBytes = new TextEncoder().encode(char).length;
+    if (running + charBytes > maxTitleBytes) break;
+    truncated += char;
+    running += charBytes;
+  }
+  return `${truncated}… (${count})`;
+}
+
 function buildUnreadMessage(chats: SplusUnreadChat[]): { text: string; keyboard: any } {
   if (chats.length === 0) {
     return { text: 'No unread messages.', keyboard: { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] } };
   }
 
-  let text = `📬 Soroush+ Unread (${chats.length} chats):\n\n`;
-  for (let i = 0; i < chats.length; i++) {
-    const chat = chats[i];
-    text += `${i + 1}. ${escapeHtml(chat.title)} (${chat.unreadCount} unread)\n`;
-    if (chat.preview) text += `   > ${escapeHtml(chat.preview.slice(0, 100))}\n`;
-    text += '\n';
-  }
+  const text = `📬 Soroush+ Unread (${chats.length} chats)\nTap a chat to see its preview:`;
 
   const rows: any[][] = [];
   for (let i = 0; i < chats.length; i++) {
-    rows.push([{ text: `${chats[i].title} (${chats[i].unreadCount})`, callback_data: `chat:${i}` }]);
+    rows.push([{ text: truncateButtonLabel(chats[i].title, chats[i].unreadCount), callback_data: `chat:${i}` }]);
   }
-  rows.push([{ text: 'Refresh', callback_data: 'refresh' }]);
+  rows.push([{ text: '🔄 Refresh', callback_data: 'refresh' }]);
 
   return { text, keyboard: { inline_keyboard: rows } };
 }
 
 function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; keyboard: any } {
+  const preview = chat.preview || 'No preview available.';
   const text = [
     `💬 ${chat.title}`,
-    `Unread: ${chat.unreadCount}`,
+    `📩 ${chat.unreadCount} unread`,
     '',
-    chat.preview ? `Last message:\n> ${escapeHtml(chat.preview)}` : 'No preview available.',
+    `Last message:\n${escapeHtml(preview)}`,
   ].join('\n');
 
-  const keyboard = { inline_keyboard: [[{ text: 'Back', callback_data: 'back' }]] };
+  const keyboard = { inline_keyboard: [[{ text: '← Back', callback_data: 'back' }]] };
   return { text, keyboard };
 }
 
@@ -274,9 +285,7 @@ export default {
             await sendMsg(chatId, 'Checking messages...', undefined, botToken);
 
             const result = await triggerGitHubWorkflow(githubToken);
-            if (result.success) {
-              await sendMsg(chatId, 'Check triggered! Messages will arrive in your Telegram shortly.', { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] }, botToken);
-            } else {
+            if (!result.success) {
               await sendMsg(chatId, `Failed to trigger check: ${result.error}`, undefined, botToken);
             }
           } else if (text === '/logout') {
