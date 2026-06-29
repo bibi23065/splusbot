@@ -10,6 +10,7 @@ export interface SplusUnreadChat {
   title: string;
   unreadCount: number;
   preview: string;
+  time: string;
 }
 
 export interface BotStatus {

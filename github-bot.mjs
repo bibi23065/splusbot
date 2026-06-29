@@ -126,6 +126,19 @@ async function main() {
         const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
         const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
 
+        // Extract timestamp from chat item
+        let time = '';
+        const timeEl = item.querySelector('.time') || item.querySelector('[class*="time"]') || item.querySelector('[class*="date"]');
+        if (timeEl) {
+          time = timeEl.textContent?.trim() || '';
+        }
+        // Fallback: look for time patterns in the item text
+        if (!time) {
+          const fullText = item.innerText || '';
+          const timeMatch = fullText.match(/(\d{1,2}:\d{2})/);
+          if (timeMatch) time = timeMatch[1];
+        }
+
         let unreadCount = 0;
 
         item.querySelectorAll('span').forEach(span => {
@@ -151,7 +164,7 @@ async function main() {
         }
 
         if (unreadCount <= 0) return;
-        results.push({ title, unreadCount, preview: preview.slice(0, 500) });
+        results.push({ title, unreadCount, preview: preview.slice(0, 500), time });
       });
       return results;
     });

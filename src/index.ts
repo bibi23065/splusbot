@@ -121,8 +121,7 @@ function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; 
   const name = escapeMarkdownV2(chat.title);
   const unread = String(chat.unreadCount);
   const preview = escapeMarkdownV2(chat.preview || 'No preview available.');
-  const now = new Date();
-  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const time = escapeMarkdownV2(chat.time || 'Unknown');
 
   const text = [
     `💬 *New Message from Soroush*`,
