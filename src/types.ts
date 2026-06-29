@@ -12,6 +12,8 @@ export interface SplusUnreadChat {
   msgType: string;
   preview: string;
   time: string;
+  duration?: string;
+  fileSize?: string;
 }
 
 export interface BotStatus {

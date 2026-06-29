@@ -124,6 +124,13 @@ function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; 
   const preview = escapeMarkdownV2(chat.preview || 'No preview available.');
   const time = escapeMarkdownV2(chat.time || 'Unknown');
 
+  let meta = '';
+  if (chat.duration) {
+    meta = ` \\(⏱️ Duration: ${escapeMarkdownV2(chat.duration)}\\)`;
+  } else if (chat.fileSize) {
+    meta = ` \\(💾 Size: ${escapeMarkdownV2(chat.fileSize)}\\)`;
+  }
+
   const text = [
     `💬 *New Message from Soroush*`,
     ``,
@@ -133,7 +140,7 @@ function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; 
     ``,
     `───────────────────`,
     ``,
-    `📂 *Message Type:* ${msgType}`,
+    `📂 *Message Type:* ${msgType}${meta}`,
     ``,
     preview,
     ``,

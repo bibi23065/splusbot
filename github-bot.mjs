@@ -130,7 +130,7 @@ async function main() {
 
     const unreadChats = await page.evaluate(() => {
       function extractPreview(lastMsg, chatItem) {
-        if (!lastMsg) return { type: '💬 Text', preview: '' };
+        if (!lastMsg) return { type: '💬 Text', preview: '', duration: undefined, fileSize: undefined };
         const text = lastMsg.textContent?.trim() || '';
         const inner = lastMsg.innerHTML || '';
         const fullItemText = chatItem ? (chatItem.textContent || '') : '';
@@ -190,64 +190,58 @@ async function main() {
 
         // 1. Poll
         if (hasClass(['poll', 'vote', 'quiz', 'Poll', 'Vote']) || hasPersian(['نظرسنجی'])) {
-          return { type: '📊 Poll', preview: text || '[Poll]' };
+          return { type: '📊 Poll', preview: text || '[Poll]', duration: undefined, fileSize: undefined };
         }
 
         // 2. Location
         if (hasClass(['location', 'map', 'geo', 'coordinate', 'Location', 'Map']) || lastMsg.querySelector('iframe[src*="map"], a[href*="maps"], a[href*="geo:"]') || hasPersian(['موقعیت', 'مکان', 'نقشه'])) {
-          return { type: '📍 Location', preview: text || '[Location shared]' };
+          return { type: '📍 Location', preview: text || '[Location shared]', duration: undefined, fileSize: undefined };
         }
 
         // 3. Contact
         if (hasClass(['contact', 'vcard', 'phone-card', 'Contact', 'VCard']) || hasPersian(['مخاطب', 'اشتراک‌گذاری مخاطب'])) {
-          return { type: '👤 Contact', preview: text || '[Contact card]' };
+          return { type: '👤 Contact', preview: text || '[Contact card]', duration: undefined, fileSize: undefined };
         }
 
         // 4. Voice Message
         if (lastMsg.querySelector('audio') || hasClass(['voice-message', 'voicemessage', 'voice-note', 'voicenote', 'voice_message', 'VoiceMessage', 'VoiceNote']) || hasPersian(['پیام صوتی'])) {
-          const dur = extractDuration();
-          const cap = extractCaption();
-          const info = dur ? `Duration: ${dur}` : '[Voice message]';
-          return { type: '🎙️ Voice Message', preview: cap ? `${info}\n${cap}` : info };
+          return { type: '🎙️ Voice Message', preview: extractCaption() || '[Voice message]', duration: extractDuration() || undefined, fileSize: undefined };
         }
 
         // 5. Audio/Music
         if (hasClass(['music', 'song', 'track', 'Music', 'Song']) || lastMsg.querySelector('[class*="audio"], [class*="Audio"]') || fileHasExt() && /\.(mp3|wav|ogg|flac|m4a)\b/i.test(text) || hasPersian(['فایل صوتی', 'آهنگ', 'موسیقی'])) {
-          return { type: '🎵 Audio', preview: extractCaption() || text || '[Audio]' };
+          return { type: '🎵 Audio', preview: extractCaption() || text || '[Audio]', duration: undefined, fileSize: undefined };
         }
 
         // 6. Video
         if (lastMsg.querySelector('video') || hasClass(['video-player', 'videoplayer', 'video-preview', 'videoPreview', 'video-note', 'videonote', 'round-video']) || hasPersian(['ویدیو', 'فیلم', 'پیام ویدیویی'])) {
-          return { type: '🎥 Video', preview: extractCaption() || text || '[Video]' };
+          return { type: '🎥 Video', preview: extractCaption() || text || '[Video]', duration: undefined, fileSize: undefined };
         }
 
         // 7. File/Document
         if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || fileHasExt() || fileHasSize() || hasPersian(['فایل', 'سند', 'ضمیمه'])) {
-          const size = extractFileSize();
-          const cap = extractCaption();
-          const info = size ? `Size: ${size}` : '[File]';
-          return { type: '📄 File', preview: cap ? `${info}\n${cap}` : info };
+          return { type: '📄 File', preview: extractCaption() || text || '[File]', duration: undefined, fileSize: extractFileSize() || undefined };
         }
 
         // 8. Sticker/GIF
         if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"], [class*="gif"], [class*="Gif"], [class*="animated"], canvas') || hasClass(['sticker', 'Sticker', 'gif', 'Gif']) || hasPersian(['استیکر'])) {
-          return { type: '✨ Sticker', preview: '[Sticker/GIF]' };
+          return { type: '✨ Sticker', preview: '[Sticker/GIF]', duration: undefined, fileSize: undefined };
         }
 
         // 9. Image
         if (lastMsg.querySelector('img') || hasPersian(['عکس', 'تصویر'])) {
-          return { type: '📷 Image', preview: extractCaption() || text || '[Image]' };
+          return { type: '📷 Image', preview: extractCaption() || text || '[Image]', duration: undefined, fileSize: undefined };
         }
 
         // 10. Text fallback
-        return { type: '💬 Text', preview: text };
+        return { type: '💬 Text', preview: text, duration: undefined, fileSize: undefined };
       }
 
       const results = [];
       document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
         const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
         const lastMsg = item.querySelector('.last-message');
-        const { type: msgType, preview: rawPreview } = extractPreview(lastMsg, item);
+        const { type: msgType, preview: rawPreview, duration, fileSize } = extractPreview(lastMsg, item);
         const preview = rawPreview.slice(0, 500);
 
         // Extract timestamp from chat item
@@ -337,7 +331,7 @@ async function main() {
         }
 
         if (unreadCount <= 0) return;
-        results.push({ title, unreadCount, msgType, preview, time });
+        results.push({ title, unreadCount, msgType, preview, time, duration, fileSize });
       });
       return results;
     });
