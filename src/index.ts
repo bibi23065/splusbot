@@ -1,4 +1,4 @@
-import type { Env } from './types';
+import type { Env, SplusUnreadChat } from './types';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 const GITHUB_REPO = 'bibi23065/splusbot';
@@ -10,6 +10,17 @@ async function sendMsg(chatId: number, text: string, replyMarkup?: any, botToken
   if (replyMarkup) body.reply_markup = JSON.stringify(replyMarkup);
   if (parseMode) body.parse_mode = parseMode;
   await fetch(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function editMsg(chatId: number, messageId: number, text: string, replyMarkup?: any, botToken?: string) {
+  if (!botToken) return;
+  const body: any = { chat_id: chatId, message_id: messageId, text };
+  if (replyMarkup) body.reply_markup = JSON.stringify(replyMarkup);
+  await fetch(`${TELEGRAM_API}/bot${botToken}/editMessageText`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -69,9 +80,62 @@ async function getLatestRun(githubToken: string): Promise<any> {
   return data.workflow_runs?.[0] || null;
 }
 
+function buildUnreadMessage(chats: SplusUnreadChat[]): { text: string; keyboard: any } {
+  if (chats.length === 0) {
+    return { text: 'No unread messages.', keyboard: { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] } };
+  }
+
+  let text = `📬 Soroush+ Unread (${chats.length} chats):\n\n`;
+  for (let i = 0; i < chats.length; i++) {
+    const chat = chats[i];
+    text += `${i + 1}. ${escapeHtml(chat.title)} (${chat.unreadCount} unread)\n`;
+    if (chat.preview) text += `   > ${escapeHtml(chat.preview.slice(0, 100))}\n`;
+    text += '\n';
+  }
+
+  const rows: any[][] = [];
+  for (let i = 0; i < chats.length; i++) {
+    rows.push([{ text: `${chats[i].title} (${chats[i].unreadCount})`, callback_data: `chat:${i}` }]);
+  }
+  rows.push([{ text: 'Refresh', callback_data: 'refresh' }]);
+
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; keyboard: any } {
+  const text = [
+    `💬 ${chat.title}`,
+    `Unread: ${chat.unreadCount}`,
+    '',
+    chat.preview ? `Last message:\n> ${escapeHtml(chat.preview)}` : 'No preview available.',
+  ].join('\n');
+
+  const keyboard = { inline_keyboard: [[{ text: 'Back', callback_data: 'back' }]] };
+  return { text, keyboard };
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    if (request.method === 'GET') return new Response('SplusBot v4', { status: 200 });
+    const url = new URL(request.url);
+
+    if (request.method === 'GET') return new Response('SplusBot v5', { status: 200 });
+
+    if (request.method === 'POST' && url.pathname === '/webhook/results') {
+      try {
+        const data = await request.json() as { chatId: number; chats: SplusUnreadChat[]; timestamp: number };
+        if (!data.chatId || !data.chats) return new Response('bad request', { status: 400 });
+
+        await env.KV.put(`splusbot:unread:${data.chatId}`, JSON.stringify(data.chats), { expirationTtl: 3600 });
+
+        const botToken = env.TELEGRAM_BOT_TOKEN;
+        const { text, keyboard } = buildUnreadMessage(data.chats);
+        await sendMsg(data.chatId, text, keyboard, botToken);
+
+        return new Response('ok', { status: 200 });
+      } catch {
+        return new Response('error', { status: 500 });
+      }
+    }
 
     try {
       const update = await request.json() as any;
@@ -82,8 +146,64 @@ export default {
       if (!chatId || !env.KV) return new Response('ok', { status: 200 });
       if (callbackQueryId) await answerCallback(callbackQueryId, env.TELEGRAM_BOT_TOKEN);
 
-      const state = await getState(env.KV, chatId);
       const botToken = env.TELEGRAM_BOT_TOKEN;
+
+      if (callbackQueryId) {
+        if (text === 'refresh') {
+          const githubToken = env.GITHUB_TOKEN;
+          if (!githubToken) {
+            await sendMsg(chatId, 'GitHub token not configured.', undefined, botToken);
+            return new Response('ok', { status: 200 });
+          }
+          const session = await env.KV.get(`splusbot:session:${chatId}`);
+          if (!session) {
+            await setState(env.KV, chatId, { state: 'UNAUTHENTICATED' });
+            await sendMsg(chatId, 'Session expired. Send /start to re-login.', undefined, botToken);
+            return new Response('ok', { status: 200 });
+          }
+          await sendMsg(chatId, 'Checking messages...', undefined, botToken);
+          const result = await triggerGitHubWorkflow(githubToken);
+          if (!result.success) {
+            await sendMsg(chatId, `Failed to trigger check: ${result.error}`, undefined, botToken);
+          }
+          return new Response('ok', { status: 200 });
+        }
+
+        if (text === 'back') {
+          const chats = await env.KV.get<SplusUnreadChat[]>(`splusbot:unread:${chatId}`, 'json');
+          if (chats) {
+            const msgId = update.callback_query?.message?.message_id;
+            const { text: msgText, keyboard } = buildUnreadMessage(chats);
+            if (msgId) {
+              await editMsg(chatId, msgId, msgText, keyboard, botToken);
+            } else {
+              await sendMsg(chatId, msgText, keyboard, botToken);
+            }
+          } else {
+            await sendMsg(chatId, 'No cached data. Click Refresh to check.', { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] }, botToken);
+          }
+          return new Response('ok', { status: 200 });
+        }
+
+        if (text.startsWith('chat:')) {
+          const index = parseInt(text.split(':')[1], 10);
+          const chats = await env.KV.get<SplusUnreadChat[]>(`splusbot:unread:${chatId}`, 'json');
+          if (chats && index >= 0 && index < chats.length) {
+            const { text: detailText, keyboard } = buildChatDetail(chats[index], index);
+            const msgId = update.callback_query?.message?.message_id;
+            if (msgId) {
+              await editMsg(chatId, msgId, detailText, keyboard, botToken);
+            } else {
+              await sendMsg(chatId, detailText, keyboard, botToken);
+            }
+          } else {
+            await sendMsg(chatId, 'Chat data expired. Click Refresh.', { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] }, botToken);
+          }
+          return new Response('ok', { status: 200 });
+        }
+      }
+
+      const state = await getState(env.KV, chatId);
 
       switch (state.state) {
         case 'UNAUTHENTICATED': {
@@ -155,7 +275,7 @@ export default {
 
             const result = await triggerGitHubWorkflow(githubToken);
             if (result.success) {
-              await sendMsg(chatId, 'Check triggered! Messages will arrive in your Telegram shortly.', undefined, botToken);
+              await sendMsg(chatId, 'Check triggered! Messages will arrive in your Telegram shortly.', { inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh' }]] }, botToken);
             } else {
               await sendMsg(chatId, `Failed to trigger check: ${result.error}`, undefined, botToken);
             }

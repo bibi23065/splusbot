@@ -10,3 +10,9 @@ export interface SplusMessage {
   chatTitle: string;
   unreadCount: number;
 }
+
+export interface SplusUnreadChat {
+  title: string;
+  unreadCount: number;
+  preview: string;
+}

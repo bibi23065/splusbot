@@ -4,6 +4,7 @@ import https from 'https';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const SESSION_JSON = process.env.SPLUS_SESSION || '';
+const WORKER_URL = process.env.WORKER_URL || '';
 
 function tg(method, body) {
   return new Promise((resolve, reject) => {
@@ -42,6 +43,24 @@ async function sendTg(text) {
   }
 }
 
+async function postToWorker(data) {
+  try {
+    const resp = await fetch(`${WORKER_URL}/webhook/results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      console.error(`Worker webhook failed: ${resp.status} ${err}`);
+    } else {
+      console.log('Results posted to worker successfully');
+    }
+  } catch (e) {
+    console.error(`Worker webhook error: ${e.message}`);
+  }
+}
+
 async function main() {
   if (!SESSION_JSON) { console.log('No session.'); return; }
 
@@ -77,7 +96,7 @@ async function main() {
   await new Promise(r => setTimeout(r, 2000));
 
   // Scroll chat list multiple times to load all items
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 15; i++) {
     await page.evaluate(() => {
       const list = document.querySelector('.chat-list');
       if (list) list.scrollTop = list.scrollHeight;
@@ -88,13 +107,13 @@ async function main() {
   // Wait for final stable count
   let prevCount = 0;
   let stableRounds = 0;
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 15; i++) {
     await new Promise(r => setTimeout(r, 2000));
     const count = await page.evaluate(() => document.querySelectorAll('.chat-list .ListItem').length);
     console.log(`Chat items loaded: ${count}`);
     if (count === prevCount && count > 0) {
       stableRounds++;
-      if (stableRounds >= 2) break;
+      if (stableRounds >= 3) break;
     } else {
       stableRounds = 0;
     }
@@ -153,19 +172,26 @@ async function main() {
   await browser.close();
 
   if (unreadChats.length === 0) {
-    await sendTg('No unread messages.');
+    if (WORKER_URL && CHAT_ID) {
+      await postToWorker({ chatId: Number(CHAT_ID), chats: [], timestamp: Date.now() });
+    } else {
+      await sendTg('No unread messages.');
+    }
     return;
   }
 
-  let msg = `Soroush+ Unread (${unreadChats.length} chats):\n\n`;
-  for (const chat of unreadChats) {
-    msg += `${chat.title} (${chat.unreadCount} unread)\n`;
-    if (chat.preview) msg += `  > ${chat.preview}\n`;
-    msg += '\n';
+  if (WORKER_URL && CHAT_ID) {
+    await postToWorker({ chatId: Number(CHAT_ID), chats: unreadChats, timestamp: Date.now() });
+  } else {
+    let msg = `Soroush+ Unread (${unreadChats.length} chats):\n\n`;
+    for (const chat of unreadChats) {
+      msg += `${chat.title} (${chat.unreadCount} unread)\n`;
+      if (chat.preview) msg += `  > ${chat.preview}\n`;
+      msg += '\n';
+    }
+    console.log(msg);
+    await sendTg(msg);
   }
-
-  console.log(msg);
-  await sendTg(msg);
 }
 
 main().catch(e => { console.error('Error:', e.message); process.exit(1); });
