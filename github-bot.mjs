@@ -241,19 +241,53 @@ async function main() {
 
         let unreadCount = 0;
 
-        item.querySelectorAll('span').forEach(span => {
-          if (span.children.length > 0) return;
-          const text = span.textContent?.trim();
-          if (!text || !/^\d+$/.test(text)) return;
-          const num = parseInt(text, 10);
-          if (num > 0 && num < 10000) {
-            const parent = span.parentElement;
-            const parentText = parent?.textContent || '';
-            if (!parentText.match(/\d{1,2}:\d{2}/) && !parentText.match(/\d{1,2}\/\d{1,2}/)) {
-              unreadCount = Math.max(unreadCount, num);
+        const badgeSelectors = [
+          '[class*="badge"]', '[class*="Badge"]',
+          '[class*="unread"]', '[class*="Unread"]',
+          '[class*="counter"]', '[class*="Counter"]',
+          '[class*="unreadCount"]', '[class*="unread-count"]',
+        ];
+        for (const sel of badgeSelectors) {
+          const badge = item.querySelector(sel);
+          if (badge) {
+            const t = badge.textContent?.trim();
+            const m = t?.match(/(\d+)/);
+            if (m) {
+              const n = parseInt(m[1], 10);
+              if (n > 0 && n < 10000) { unreadCount = n; break; }
             }
           }
-        });
+        }
+
+        if (unreadCount === 0) {
+          item.querySelectorAll('span').forEach(span => {
+            if (span.children.length > 0) return;
+            const t = span.textContent?.trim();
+            if (!t || !/^\d+$/.test(t)) return;
+            const num = parseInt(t, 10);
+            if (num > 0 && num < 10000) {
+              const parent = span.parentElement;
+              const parentText = parent?.textContent || '';
+              if (!parentText.match(/\d{1,2}:\d{2}/) && !parentText.match(/\d{1,2}\/\d{1,2}/)) {
+                const grandparent = parent?.parentElement;
+                const siblings = grandparent ? Array.from(grandparent.children) : [];
+                let combined = '';
+                for (const sib of siblings) {
+                  const sibText = sib.textContent?.trim() || '';
+                  if (/^\d+$/.test(sibText)) combined += sibText;
+                }
+                if (combined.length > 1) {
+                  const combinedNum = parseInt(combined, 10);
+                  if (combinedNum > 0 && combinedNum < 10000) {
+                    unreadCount = Math.max(unreadCount, combinedNum);
+                    return;
+                  }
+                }
+                unreadCount = Math.max(unreadCount, num);
+              }
+            }
+          });
+        }
 
         if (unreadCount === 0) {
           const match = item.innerText.match(/(\d+)\s*$/);
