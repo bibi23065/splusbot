@@ -148,6 +148,16 @@ async function main() {
           return clone.textContent?.trim() || '';
         }
 
+        function extractDuration() {
+          const dur = text.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+          return dur ? dur[1] : null;
+        }
+
+        function extractFileSize() {
+          const size = text.match(/(\d+\.?\d*\s*(?:KB|MB|GB|B|TB)\b)/i);
+          return size ? size[1] : null;
+        }
+
         function fileHasSize() {
           return /\d+\.?\d*\s*(KB|MB|GB|B)\b/i.test(text);
         }
@@ -172,7 +182,10 @@ async function main() {
 
         // 4. Voice Message
         if (lastMsg.querySelector('audio') || hasClass(['voice-message', 'voicemessage', 'voice-note', 'voicenote', 'voice_message', 'VoiceMessage', 'VoiceNote']) || hasPersian(['پیام صوتی'])) {
-          return { type: '🎙️ Voice Message', preview: extractCaption() || '[Voice message]' };
+          const dur = extractDuration();
+          const cap = extractCaption();
+          const info = dur ? `Duration: ${dur}` : '[Voice message]';
+          return { type: '🎙️ Voice Message', preview: cap ? `${info}\n${cap}` : info };
         }
 
         // 5. Audio/Music
@@ -187,7 +200,10 @@ async function main() {
 
         // 7. File/Document
         if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || fileHasExt() || fileHasSize() || hasPersian(['فایل', 'سند', 'ضمیمه'])) {
-          return { type: '📄 File', preview: extractCaption() || text || '[File]' };
+          const size = extractFileSize();
+          const cap = extractCaption();
+          const info = size ? `Size: ${size}` : '[File]';
+          return { type: '📄 File', preview: cap ? `${info}\n${cap}` : info };
         }
 
         // 8. Sticker/GIF
