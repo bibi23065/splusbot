@@ -9,6 +9,7 @@ export type BotState = 'UNAUTHENTICATED' | 'AWAITING_TOKEN' | 'AUTHENTICATED';
 export interface SplusUnreadChat {
   title: string;
   unreadCount: number;
+  msgType: string;
   preview: string;
   time: string;
 }

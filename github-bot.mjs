@@ -130,36 +130,92 @@ async function main() {
 
     const unreadChats = await page.evaluate(() => {
       function extractPreview(lastMsg) {
-        if (!lastMsg) return '';
-        let mediaType = null;
+        if (!lastMsg) return { type: '💬 Text', preview: '' };
+        const text = lastMsg.textContent?.trim() || '';
+        const inner = lastMsg.innerHTML || '';
 
-        if (lastMsg.querySelector('video, [class*="video-player"], [class*="VideoPlayer"], [class*="videoPreview"]')) {
-          mediaType = '🎥 Video';
-        } else if (lastMsg.querySelector('[class*="file-info"], [class*="FileInfo"], [class*="download"], [class*="Download"], [class*="document"]')) {
-          mediaType = '📄 File';
-        } else if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"], [class*="animated"]')) {
-          mediaType = '✨ Sticker';
-        } else if (lastMsg.querySelector('audio, [class*="voice"], [class*="audio"], [class*="Voice"]')) {
-          mediaType = '🎙️ Voice';
-        } else if (lastMsg.querySelector('img')) {
-          mediaType = '📷 Image';
+        function hasText(sel) {
+          const el = lastMsg.querySelector(sel);
+          return el && el.textContent?.trim().length > 0;
         }
 
-        const clone = lastMsg.cloneNode(true);
-        clone.querySelectorAll('img, video, audio, svg, [class*="file"], [class*="voice"], [class*="sticker"], [class*="download"]').forEach(el => el.remove());
-        const caption = clone.textContent?.trim() || '';
-
-        if (mediaType) {
-          return caption ? `${mediaType}: ${caption}` : mediaType;
+        function hasClass(patterns) {
+          return patterns.some(p => inner.toLowerCase().includes(p.toLowerCase()));
         }
-        return caption || lastMsg.textContent?.trim() || '';
+
+        function extractCaption() {
+          const clone = lastMsg.cloneNode(true);
+          clone.querySelectorAll('video, audio, img, svg, canvas, iframe, [class*="player"], [class*="Player"]').forEach(el => el.remove());
+          return clone.textContent?.trim() || '';
+        }
+
+        function fileHasSize() {
+          return /\d+\.?\d*\s*(KB|MB|GB|B)\b/i.test(text);
+        }
+        function fileHasExt() {
+          return /\.(pdf|zip|docx?|xlsx?|pptx?|rar|7z|txt|csv|apk|exe|mp[34]|wav|ogg|flac)\b/i.test(text);
+        }
+
+        // 1. Poll
+        if (hasClass(['poll', 'vote', 'quiz']) || lastMsg.querySelector('[class*="poll"], [class*="Poll"], [class*="vote"], [class*="Vote"], [class*="option"], [class*="Option"]')) {
+          return { type: '📊 Poll', preview: text || '[Poll]' };
+        }
+
+        // 2. Location
+        if (hasClass(['location', 'map', 'geo', 'coordinate']) || lastMsg.querySelector('[class*="location"], [class*="Location"], [class*="map"], [class*="Map"], iframe[src*="map"], a[href*="maps"], a[href*="geo:"]')) {
+          return { type: '📍 Location', preview: text || '[Location shared]' };
+        }
+
+        // 3. Contact
+        if (hasClass(['contact', 'vcard', 'phone-card']) || lastMsg.querySelector('[class*="contact"], [class*="Contact"], [class*="vcard"], [class*="VCard"]')) {
+          return { type: '👤 Contact', preview: text || '[Contact card]' };
+        }
+
+        // 4. Voice Message (short voice notes with audio players)
+        if (lastMsg.querySelector('audio') || hasClass(['voice-message', 'voicemessage', 'voice-note', 'voicenote', 'voice_message'])) {
+          const cap = extractCaption();
+          return { type: '🎙️ Voice Message', preview: cap || '[Voice message]' };
+        }
+
+        // 5. Audio/Music (longer audio files)
+        if (hasClass(['audio', 'music', 'song', 'track']) || lastMsg.querySelector('[class*="audio"], [class*="Audio"], [class*="music"], [class*="Music"]') || fileHasExt() && /\.(mp3|wav|ogg|flac|m4a)\b/i.test(text)) {
+          const cap = extractCaption();
+          return { type: '🎵 Audio', preview: cap || text || '[Audio]' };
+        }
+
+        // 6. Video
+        if (lastMsg.querySelector('video') || hasClass(['video-player', 'videoplayer', 'video-preview', 'videoPreview', 'video-note', 'videonote', 'round-video'])) {
+          const cap = extractCaption();
+          return { type: '🎥 Video', preview: cap || text || '[Video]' };
+        }
+
+        // 7. File/Document
+        if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || (fileHasExt() && fileHasSize())) {
+          const cap = extractCaption();
+          return { type: '📄 File', preview: cap || text || '[File]' };
+        }
+
+        // 8. Sticker/GIF
+        if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"], [class*="gif"], [class*="Gif"], [class*="animated"], canvas') || hasClass(['sticker', 'Sticker', 'gif', 'Gif'])) {
+          return { type: '✨ Sticker', preview: '[Sticker/GIF]' };
+        }
+
+        // 9. Image
+        if (lastMsg.querySelector('img')) {
+          const cap = extractCaption();
+          return { type: '📷 Image', preview: cap || text || '[Image]' };
+        }
+
+        // 10. Text fallback
+        return { type: '💬 Text', preview: text };
       }
 
       const results = [];
       document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
         const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
         const lastMsg = item.querySelector('.last-message');
-        const preview = extractPreview(lastMsg);
+        const { type: msgType, preview: rawPreview } = extractPreview(lastMsg);
+        const preview = rawPreview.slice(0, 500);
 
         // Extract timestamp from chat item
         let time = '';
@@ -214,7 +270,7 @@ async function main() {
         }
 
         if (unreadCount <= 0) return;
-        results.push({ title, unreadCount, preview: preview.slice(0, 500), time });
+        results.push({ title, unreadCount, msgType, preview, time });
       });
       return results;
     });

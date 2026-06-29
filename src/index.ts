@@ -120,6 +120,7 @@ function buildUnreadMessage(chats: SplusUnreadChat[]): { text: string; keyboard:
 function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; keyboard: any } {
   const name = escapeMarkdownV2(chat.title);
   const unread = String(chat.unreadCount);
+  const msgType = escapeMarkdownV2(chat.msgType || '💬 Text');
   const preview = escapeMarkdownV2(chat.preview || 'No preview available.');
   const time = escapeMarkdownV2(chat.time || 'Unknown');
 
@@ -131,6 +132,8 @@ function buildChatDetail(chat: SplusUnreadChat, index: number): { text: string; 
     `🕒 *Time:* \`${time} IRST\``,
     ``,
     `───────────────────`,
+    ``,
+    `📂 *Message Type:* ${msgType}`,
     ``,
     preview,
     ``,
