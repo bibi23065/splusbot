@@ -172,42 +172,29 @@ async function main() {
         const msgs = [];
         const seen = new Set();
 
-        // Find elements that are in the right portion of the screen
-        // and look like message content
-        const allEls = document.querySelectorAll('.bubble, [class*="Bubble"], [class*="message"], .text, [class*="text"]');
-        for (const el of allEls) {
-          const rect = el.getBoundingClientRect();
-          if (rect.left < 350) continue;
-          const text = el.textContent?.trim();
-          if (!text || text.length < 2 || text.length > 500) continue;
+        // The chat view is the right half of the screen (x > 400)
+        // Find leaf text elements only in that region
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        let node;
+        while (node = walker.nextNode()) {
+          const rect = node.getBoundingClientRect();
+          if (rect.left < 400 || rect.width < 30) continue;
+          if (node.children.length > 0) continue; // leaf only
+
+          const text = node.textContent?.trim();
+          if (!text || text.length < 2 || text.length > 400) continue;
           if (seen.has(text)) continue;
-          const cls = el.className?.toString?.() || '';
-          if (cls.match(/header|input|button|icon|avatar|tab|menu|badge/i)) continue;
+
+          const cls = node.className?.toString?.() || '';
+          const parentCls = node.parentElement?.className?.toString?.() || '';
+          // Skip UI elements
+          if ((cls + parentCls).match(/header|input|button|icon|avatar|tab|menu|badge|folder|status|search|spinner|ListItem|Chat|chat-list/i)) continue;
+
           seen.add(text);
           msgs.push(text.slice(0, 300));
         }
 
-        // If no messages found, try innerText of right panel
-        if (msgs.length === 0) {
-          const rightPanel = document.querySelector('.middle-column, [class*="MiddleColumn"]');
-          if (rightPanel) {
-            const rect = rightPanel.getBoundingClientRect();
-            if (rect.left > 300) {
-              const text = rightPanel.innerText?.trim();
-              if (text) {
-                text.split('\n').forEach(line => {
-                  const trimmed = line.trim();
-                  if (trimmed.length > 2 && trimmed.length < 400 && !seen.has(trimmed)) {
-                    seen.add(trimmed);
-                    msgs.push(trimmed);
-                  }
-                });
-              }
-            }
-          }
-        }
-
-        return msgs.slice(-10);
+        return msgs.slice(-8);
       });
 
       msg += `**${chat.title}** (${chat.unreadCount})\n`;
