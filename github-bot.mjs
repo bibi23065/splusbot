@@ -153,7 +153,7 @@ async function main() {
           return /\d+\.?\d*\s*(KB|MB|GB|B)\b/i.test(text);
         }
         function fileHasExt() {
-          return /\.(pdf|zip|docx?|xlsx?|pptx?|rar|7z|txt|csv|apk|exe|mp[34]|wav|ogg|flac)\b/i.test(text);
+          return /\.\w{1,10}(\s|$)/.test(text) && /\.(pdf|zip|docx?|xlsx?|pptx?|rar|7z|txt|csv|apk|exe|json|xml|yaml|yml|md|py|js|ts|html|css|log|sql|sh|bat|c|cpp|h|java|rb|php|swift|kt|rs|go)\b/i.test(text);
         }
 
         // 1. Poll
@@ -190,7 +190,7 @@ async function main() {
         }
 
         // 7. File/Document
-        if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || (fileHasExt() && fileHasSize())) {
+        if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || fileHasExt() || fileHasSize()) {
           const cap = extractCaption();
           return { type: '📄 File', preview: cap || text || '[File]' };
         }
