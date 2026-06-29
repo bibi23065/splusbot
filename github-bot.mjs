@@ -134,13 +134,12 @@ async function main() {
         const text = lastMsg.textContent?.trim() || '';
         const inner = lastMsg.innerHTML || '';
 
-        function hasText(sel) {
-          const el = lastMsg.querySelector(sel);
-          return el && el.textContent?.trim().length > 0;
-        }
-
         function hasClass(patterns) {
           return patterns.some(p => inner.toLowerCase().includes(p.toLowerCase()));
+        }
+
+        function hasPersian(keywords) {
+          return keywords.some(k => text.includes(k));
         }
 
         function extractCaption() {
@@ -157,53 +156,48 @@ async function main() {
         }
 
         // 1. Poll
-        if (hasClass(['poll', 'vote', 'quiz']) || lastMsg.querySelector('[class*="poll"], [class*="Poll"], [class*="vote"], [class*="Vote"], [class*="option"], [class*="Option"]')) {
+        if (hasClass(['poll', 'vote', 'quiz', 'Poll', 'Vote']) || hasPersian(['نظرسنجی'])) {
           return { type: '📊 Poll', preview: text || '[Poll]' };
         }
 
         // 2. Location
-        if (hasClass(['location', 'map', 'geo', 'coordinate']) || lastMsg.querySelector('[class*="location"], [class*="Location"], [class*="map"], [class*="Map"], iframe[src*="map"], a[href*="maps"], a[href*="geo:"]')) {
+        if (hasClass(['location', 'map', 'geo', 'coordinate', 'Location', 'Map']) || lastMsg.querySelector('iframe[src*="map"], a[href*="maps"], a[href*="geo:"]') || hasPersian(['موقعیت', 'مکان', 'نقشه'])) {
           return { type: '📍 Location', preview: text || '[Location shared]' };
         }
 
         // 3. Contact
-        if (hasClass(['contact', 'vcard', 'phone-card']) || lastMsg.querySelector('[class*="contact"], [class*="Contact"], [class*="vcard"], [class*="VCard"]')) {
+        if (hasClass(['contact', 'vcard', 'phone-card', 'Contact', 'VCard']) || hasPersian(['مخاطب', 'اشتراک‌گذاری مخاطب'])) {
           return { type: '👤 Contact', preview: text || '[Contact card]' };
         }
 
-        // 4. Voice Message (short voice notes with audio players)
-        if (lastMsg.querySelector('audio') || hasClass(['voice-message', 'voicemessage', 'voice-note', 'voicenote', 'voice_message'])) {
-          const cap = extractCaption();
-          return { type: '🎙️ Voice Message', preview: cap || '[Voice message]' };
+        // 4. Voice Message
+        if (lastMsg.querySelector('audio') || hasClass(['voice-message', 'voicemessage', 'voice-note', 'voicenote', 'voice_message', 'VoiceMessage', 'VoiceNote']) || hasPersian(['پیام صوتی'])) {
+          return { type: '🎙️ Voice Message', preview: extractCaption() || '[Voice message]' };
         }
 
-        // 5. Audio/Music (longer audio files)
-        if (hasClass(['audio', 'music', 'song', 'track']) || lastMsg.querySelector('[class*="audio"], [class*="Audio"], [class*="music"], [class*="Music"]') || fileHasExt() && /\.(mp3|wav|ogg|flac|m4a)\b/i.test(text)) {
-          const cap = extractCaption();
-          return { type: '🎵 Audio', preview: cap || text || '[Audio]' };
+        // 5. Audio/Music
+        if (hasClass(['music', 'song', 'track', 'Music', 'Song']) || lastMsg.querySelector('[class*="audio"], [class*="Audio"]') || fileHasExt() && /\.(mp3|wav|ogg|flac|m4a)\b/i.test(text) || hasPersian(['فایل صوتی', 'آهنگ', 'موسیقی'])) {
+          return { type: '🎵 Audio', preview: extractCaption() || text || '[Audio]' };
         }
 
         // 6. Video
-        if (lastMsg.querySelector('video') || hasClass(['video-player', 'videoplayer', 'video-preview', 'videoPreview', 'video-note', 'videonote', 'round-video'])) {
-          const cap = extractCaption();
-          return { type: '🎥 Video', preview: cap || text || '[Video]' };
+        if (lastMsg.querySelector('video') || hasClass(['video-player', 'videoplayer', 'video-preview', 'videoPreview', 'video-note', 'videonote', 'round-video']) || hasPersian(['ویدیو', 'فیلم', 'پیام ویدیویی'])) {
+          return { type: '🎥 Video', preview: extractCaption() || text || '[Video]' };
         }
 
         // 7. File/Document
-        if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || fileHasExt() || fileHasSize()) {
-          const cap = extractCaption();
-          return { type: '📄 File', preview: cap || text || '[File]' };
+        if (lastMsg.querySelector('[class*="file"], [class*="File"], [class*="document"], [class*="Document"], [class*="download"], [class*="Download"], [class*="attachment"], [class*="Attachment"]') || fileHasExt() || fileHasSize() || hasPersian(['فایل', 'سند', 'ضمیمه'])) {
+          return { type: '📄 File', preview: extractCaption() || text || '[File]' };
         }
 
         // 8. Sticker/GIF
-        if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"], [class*="gif"], [class*="Gif"], [class*="animated"], canvas') || hasClass(['sticker', 'Sticker', 'gif', 'Gif'])) {
+        if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"], [class*="gif"], [class*="Gif"], [class*="animated"], canvas') || hasClass(['sticker', 'Sticker', 'gif', 'Gif']) || hasPersian(['استیکر'])) {
           return { type: '✨ Sticker', preview: '[Sticker/GIF]' };
         }
 
         // 9. Image
-        if (lastMsg.querySelector('img')) {
-          const cap = extractCaption();
-          return { type: '📷 Image', preview: cap || text || '[Image]' };
+        if (lastMsg.querySelector('img') || hasPersian(['عکس', 'تصویر'])) {
+          return { type: '📷 Image', preview: extractCaption() || text || '[Image]' };
         }
 
         // 10. Text fallback
