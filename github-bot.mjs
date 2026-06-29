@@ -62,53 +62,14 @@ async function getUnreadChats(page) {
       const title = titleEl?.textContent?.trim() || 'Unknown';
       const lastMsg = item.querySelector('.last-message');
       const preview = lastMsg?.textContent?.trim() || '';
-      // Extract chat ID from the item's data attributes or onclick
-      const dataId = item.getAttribute('data-chat-id') || item.getAttribute('data-id');
-      const onclick = item.getAttribute('onclick') || '';
-      const idMatch = onclick.match(/(-?\d+)/);
-      const chatId = dataId || (idMatch ? idMatch[1] : null);
-      results.push({ index, title, unreadCount: count, preview: preview.slice(0, 200), chatId });
+      results.push({ index, title, unreadCount: count, preview: preview.slice(0, 200) });
     });
     return results;
   });
 }
 
-async function extractChatMessages(page) {
-  await new Promise(r => setTimeout(r, 4000));
-
-  return await page.evaluate(() => {
-    const msgs = [];
-
-    // Find the right panel (chat view) - anything after x=350
-    const allEls = document.querySelectorAll('*');
-    const seen = new Set();
-
-    for (const el of allEls) {
-      const rect = el.getBoundingClientRect();
-      // Only elements in the right portion (chat area)
-      if (rect.left < 400 || rect.width < 50) continue;
-
-      const text = el.textContent?.trim();
-      if (!text || text.length < 2 || text.length > 400) continue;
-      if (seen.has(text)) continue;
-
-      const cls = el.className?.toString?.() || '';
-      // Skip chat list items and UI chrome
-      if (cls.match(/ListItem|Chat|tab|header|input|button|icon|avatar|spinner|menu|search|badge|folder/i)) continue;
-      // Only leaf-ish elements
-      if (el.children.length > 2) continue;
-
-      seen.add(text);
-      msgs.push(text.slice(0, 300));
-    }
-
-    return msgs.slice(-15);
-  });
-}
-
 async function main() {
   console.log('Soroush+ Bot');
-
   if (!SESSION_JSON) { console.log('No session.'); return; }
 
   let sessionData;
@@ -137,9 +98,6 @@ async function main() {
     return;
   }
 
-  // Take initial screenshot for debugging
-  await page.screenshot({ path: '/tmp/splus-initial.png' });
-
   const unreadChats = await getUnreadChats(page);
   if (unreadChats.length === 0) {
     await sendTg('No unread messages.');
@@ -153,64 +111,47 @@ async function main() {
 
   for (const chat of unreadChats) {
     console.log(`Opening: ${chat.title}`);
+
     try {
-      // Navigate directly to chat via hash
-      await page.evaluate((chatIndex) => {
-        const item = document.querySelectorAll('.chat-list .ListItem')[chatIndex];
-        if (item) {
-          // Try clicking the chat item's inner link/button
-          const link = item.querySelector('a, button, [role="button"]');
-          if (link) link.click();
-          else item.click();
-        }
-      }, chat.index);
+      // Click the chat item using puppeteer's click method with force
+      const items = await page.$$('.chat-list .ListItem');
+      if (items[chat.index]) {
+        await items[chat.index].click({ force: true });
+      }
 
-      await new Promise(r => setTimeout(r, 4000));
+      // Wait for chat view to appear
+      await page.waitForFunction(() => {
+        // Check if URL hash changed or if right panel content changed
+        return window.location.hash.length > 1;
+      }, { timeout: 5000 }).catch(() => {});
 
-      // Extract messages from the right panel (chat view)
-      const messages = await page.evaluate(() => {
-        const msgs = [];
-        const seen = new Set();
+      await new Promise(r => setTimeout(r, 3000));
 
-        // The chat view is the right half of the screen (x > 400)
-        // Find leaf text elements only in that region
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-        let node;
-        while (node = walker.nextNode()) {
-          const rect = node.getBoundingClientRect();
-          if (rect.left < 400 || rect.width < 30) continue;
-          if (node.children.length > 0) continue; // leaf only
+      // Get the current hash (chat ID)
+      const hash = await page.evaluate(() => window.location.hash);
 
-          const text = node.textContent?.trim();
-          if (!text || text.length < 2 || text.length > 400) continue;
-          if (seen.has(text)) continue;
-
-          const cls = node.className?.toString?.() || '';
-          const parentCls = node.parentElement?.className?.toString?.() || '';
-          // Skip UI elements
-          if ((cls + parentCls).match(/header|input|button|icon|avatar|tab|menu|badge|folder|status|search|spinner|ListItem|Chat|chat-list/i)) continue;
-
-          seen.add(text);
-          msgs.push(text.slice(0, 300));
-        }
-
-        return msgs.slice(-8);
+      // Extract all visible text from the page, filtering to right panel
+      const pageText = await page.evaluate(() => {
+        const rightPanel = document.querySelector('.middle-column, [class*="MiddleColumn"]');
+        if (!rightPanel) return '';
+        return rightPanel.innerText || '';
       });
 
-      msg += `**${chat.title}** (${chat.unreadCount})\n`;
-      if (messages.length > 0) {
-        messages.forEach(m => { msg += `  ${m}\n`; });
+      const lines = pageText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+      msg += `**${chat.title}** (${chat.unreadCount}) [${hash}]\n`;
+      if (lines.length > 0) {
+        lines.slice(-8).forEach(l => { msg += `  ${l}\n`; });
       } else {
         msg += `  ${chat.preview}\n`;
       }
       msg += '\n';
 
-      // Navigate back to chat list
-      await page.evaluate(() => {
-        document.querySelector('.Tab--active')?.click();
-      });
+      // Return to chat list
+      await page.evaluate(() => { window.location.hash = ''; });
       await waitForChatList(page);
     } catch (e) {
+      console.log(`Error: ${e.message}`);
       msg += `**${chat.title}** (${chat.unreadCount})\n  ${chat.preview}\n\n`;
     }
   }
