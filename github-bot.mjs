@@ -117,26 +117,25 @@ async function main() {
       const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
       const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
 
-      // Find ALL badge elements and check each one
-      const allBadges = item.querySelectorAll('[class*="badge"], [class*="unread"], [class*="counter"], [class*="Badge"], [class*="count"]');
       let unreadCount = 0;
 
-      for (const badge of allBadges) {
-        // Skip if hidden
-        const style = window.getComputedStyle(badge);
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
-
-        const text = badge.textContent?.trim();
-        if (!text) continue;
-
+      // Find leaf span elements containing only a number
+      item.querySelectorAll('span').forEach(span => {
+        if (span.children.length > 0) return;
+        const text = span.textContent?.trim();
+        if (!text || !/^\d+$/.test(text)) return;
         const num = parseInt(text, 10);
         if (num > 0 && num < 10000) {
-          unreadCount = num;
-          break;
+          // Make sure it's not part of a date or time
+          const parent = span.parentElement;
+          const parentText = parent?.textContent || '';
+          if (!parentText.match(/\d{1,2}:\d{2}/) && !parentText.match(/\d{1,2}\/\d{1,2}/)) {
+            unreadCount = Math.max(unreadCount, num);
+          }
         }
-      }
+      });
 
-      // Fallback: trailing number in item text
+      // Fallback: trailing number in the item's full text
       if (unreadCount === 0) {
         const match = item.innerText.match(/(\d+)\s*$/);
         if (match) {
