@@ -64,10 +64,31 @@ async function main() {
   }, sessionData);
   await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
 
-  // Wait for chat list to be stable (no new items loading)
+  // Click "All" tab to show all chats
+  await page.evaluate(() => {
+    const tabs = document.querySelectorAll('.Tab');
+    for (const tab of tabs) {
+      if (tab.textContent?.includes('همه') || tab.textContent?.includes('All')) {
+        tab.click();
+        break;
+      }
+    }
+  });
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Scroll chat list multiple times to load all items
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate(() => {
+      const list = document.querySelector('.chat-list');
+      if (list) list.scrollTop = list.scrollHeight;
+    });
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  // Wait for final stable count
   let prevCount = 0;
   let stableRounds = 0;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 8; i++) {
     await new Promise(r => setTimeout(r, 2000));
     const count = await page.evaluate(() => document.querySelectorAll('.chat-list .ListItem').length);
     console.log(`Chat items loaded: ${count}`);
@@ -78,7 +99,6 @@ async function main() {
       stableRounds = 0;
     }
     prevCount = count;
-    // Scroll chat list to trigger lazy loading
     await page.evaluate(() => {
       const list = document.querySelector('.chat-list');
       if (list) list.scrollTop = list.scrollHeight;
@@ -97,38 +117,31 @@ async function main() {
       const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
       const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
 
-      // Method 1: Find badge with numeric content (unread count)
-      const badges = item.querySelectorAll('[class*="badge"], [class*="unread"], [class*="counter"]');
+      // Find ALL badge elements and check each one
+      const allBadges = item.querySelectorAll('[class*="badge"], [class*="unread"], [class*="counter"], [class*="Badge"], [class*="count"]');
       let unreadCount = 0;
-      for (const badge of badges) {
-        const num = parseInt(badge.textContent?.trim(), 10);
+
+      for (const badge of allBadges) {
+        // Skip if hidden
+        const style = window.getComputedStyle(badge);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+        const text = badge.textContent?.trim();
+        if (!text) continue;
+
+        const num = parseInt(text, 10);
         if (num > 0 && num < 10000) {
           unreadCount = num;
           break;
         }
       }
 
-      // Method 2: Check trailing number in the item text
+      // Fallback: trailing number in item text
       if (unreadCount === 0) {
-        const text = item.innerText;
-        const match = text.match(/(\d+)\s*$/);
+        const match = item.innerText.match(/(\d+)\s*$/);
         if (match) {
           const num = parseInt(match[1], 10);
           if (num > 0 && num < 10000) unreadCount = num;
-        }
-      }
-
-      // Method 3: Check for visible badge element with content
-      if (unreadCount === 0) {
-        for (const badge of badges) {
-          const style = window.getComputedStyle(badge);
-          if (style.display !== 'none' && style.visibility !== 'hidden') {
-            const text = badge.textContent?.trim();
-            if (text && text.length > 0 && text.length < 10) {
-              const num = parseInt(text, 10);
-              if (num > 0) unreadCount = num;
-            }
-          }
         }
       }
 
