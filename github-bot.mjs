@@ -93,35 +93,26 @@ async function main() {
       }
     }
   });
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise(r => setTimeout(r, 1000));
 
-  // Scroll chat list multiple times to load all items
-  for (let i = 0; i < 15; i++) {
+  // Scroll chat list to load all items, stop when count stabilizes
+  let prevCount = 0;
+  let stableRounds = 0;
+  for (let i = 0; i < 12; i++) {
     await page.evaluate(() => {
       const list = document.querySelector('.chat-list');
       if (list) list.scrollTop = list.scrollHeight;
     });
-    await new Promise(r => setTimeout(r, 1500));
-  }
-
-  // Wait for final stable count
-  let prevCount = 0;
-  let stableRounds = 0;
-  for (let i = 0; i < 15; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1000));
     const count = await page.evaluate(() => document.querySelectorAll('.chat-list .ListItem').length);
     console.log(`Chat items loaded: ${count}`);
     if (count === prevCount && count > 0) {
       stableRounds++;
-      if (stableRounds >= 3) break;
+      if (stableRounds >= 2) break;
     } else {
       stableRounds = 0;
     }
     prevCount = count;
-    await page.evaluate(() => {
-      const list = document.querySelector('.chat-list');
-      if (list) list.scrollTop = list.scrollHeight;
-    });
   }
 
   if (page.url().includes('auth') || page.url().includes('login')) {
