@@ -129,10 +129,29 @@ async function main() {
     }
 
     const unreadChats = await page.evaluate(() => {
+      function extractPreview(lastMsg) {
+        if (!lastMsg) return '';
+        const mediaTypes = [];
+        if (lastMsg.querySelector('img')) mediaTypes.push('📷 Image');
+        if (lastMsg.querySelector('video')) mediaTypes.push('🎥 Video');
+        if (lastMsg.querySelector('[class*="file"], [class*="document"], [class*="attachment"]')) mediaTypes.push('📄 File');
+        if (lastMsg.querySelector('audio, [class*="voice"], [class*="audio"]')) mediaTypes.push('🎙️ Voice');
+        if (lastMsg.querySelector('[class*="sticker"], [class*="Sticker"]')) mediaTypes.push('🎨 Sticker');
+        const clone = lastMsg.cloneNode(true);
+        clone.querySelectorAll('img, video, audio, svg, [class*="file"], [class*="voice"]').forEach(el => el.remove());
+        const caption = clone.textContent?.trim() || '';
+        if (mediaTypes.length > 0) {
+          const typeLabel = mediaTypes.join(', ');
+          return caption ? `${typeLabel}: ${caption}` : typeLabel;
+        }
+        return caption || lastMsg.textContent?.trim() || '';
+      }
+
       const results = [];
       document.querySelectorAll('.chat-list .ListItem').forEach((item) => {
         const title = item.querySelector('.title')?.textContent?.trim() || 'Unknown';
-        const preview = item.querySelector('.last-message')?.textContent?.trim() || '';
+        const lastMsg = item.querySelector('.last-message');
+        const preview = extractPreview(lastMsg);
 
         // Extract timestamp from chat item
         let time = '';
